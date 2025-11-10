@@ -47,7 +47,7 @@ void debugPrint(const char* message);
 void setup() {
   // Initialize M5AtomS3
   auto cfg = M5.config();
-  AtomS3.begin(cfg);
+  M5.begin(cfg);
   
   // Initialize serial for debugging
   #if DEBUG_MODE
@@ -84,7 +84,7 @@ void setup() {
 // ========================================
 void loop() {
   // Update M5 (for button handling, etc.)
-  AtomS3.update();
+  M5.update();
   
   // Handle incoming MIDI messages
   handleMIDI();
@@ -222,10 +222,10 @@ void debugPrint(const char* message) {
 void setupDisplay() {
   #if DISPLAY_ENABLED
     // Set display brightness
-    AtomS3.Display.setBrightness(DISPLAY_BRIGHTNESS);
+    M5.Display.setBrightness(DISPLAY_BRIGHTNESS);
     
     // Clear screen
-    AtomS3.Display.fillScreen(COLOR_BG);
+    M5.Display.fillScreen(COLOR_BG);
     
     // Initialize MIDI log
     for (int i = 0; i < MIDI_LOG_LINES; i++) {
@@ -234,10 +234,10 @@ void setupDisplay() {
     }
     
     // Draw initial UI
-    AtomS3.Display.setTextColor(COLOR_TITLE, COLOR_BG);
-    AtomS3.Display.setTextSize(1);
-    AtomS3.Display.setCursor(2, 2);
-    AtomS3.Display.println("LeslieLEDs");
+    M5.Display.setTextColor(COLOR_TITLE, COLOR_BG);
+    M5.Display.setTextSize(1);
+    M5.Display.setCursor(2, 2);
+    M5.Display.println("LeslieLEDs");
   #endif
 }
 
@@ -247,37 +247,37 @@ void setupDisplay() {
 void updateDisplay() {
   #if DISPLAY_ENABLED
     // Get display dimensions
-    int16_t w = AtomS3.Display.width();
-    int16_t h = AtomS3.Display.height();
+    int16_t w = M5.Display.width();
+    int16_t h = M5.Display.height();
     
     // Title area (top 12px)
-    AtomS3.Display.fillRect(0, 0, w, 12, COLOR_BG);
-    AtomS3.Display.setTextColor(COLOR_TITLE, COLOR_BG);
-    AtomS3.Display.setTextSize(1);
-    AtomS3.Display.setCursor(2, 2);
-    AtomS3.Display.print("LeslieLEDs");
+    M5.Display.fillRect(0, 0, w, 12, COLOR_BG);
+    M5.Display.setTextColor(COLOR_TITLE, COLOR_BG);
+    M5.Display.setTextSize(1);
+    M5.Display.setCursor(2, 2);
+    M5.Display.print("LeslieLEDs");
     
     // State area (line 2, 12-24px)
-    AtomS3.Display.fillRect(0, 12, w, 12, COLOR_BG);
+    M5.Display.fillRect(0, 12, w, 12, COLOR_BG);
     uint16_t stateColor = deviceState == "READY" ? COLOR_STATE_OK : COLOR_STATE_WAIT;
-    AtomS3.Display.setTextColor(stateColor, COLOR_BG);
-    AtomS3.Display.setCursor(2, 14);
-    AtomS3.Display.print(deviceState);
-    AtomS3.Display.print(" M:");
-    AtomS3.Display.print(animationMode);
-    AtomS3.Display.print(" B:");
-    AtomS3.Display.print(currentBrightness);
+    M5.Display.setTextColor(stateColor, COLOR_BG);
+    M5.Display.setCursor(2, 14);
+    M5.Display.print(deviceState);
+    M5.Display.print(" M:");
+    M5.Display.print(animationMode);
+    M5.Display.print(" B:");
+    M5.Display.print(currentBrightness);
     
     // Separator line
-    AtomS3.Display.drawFastHLine(0, 25, w, COLOR_TEXT);
+    M5.Display.drawFastHLine(0, 25, w, COLOR_TEXT);
     
     // MIDI Log area (remaining space)
     int logStartY = 28;
     int lineHeight = 10;
     
-    AtomS3.Display.fillRect(0, logStartY, w, h - logStartY, COLOR_BG);
-    AtomS3.Display.setTextColor(COLOR_MIDI_CC, COLOR_BG);
-    AtomS3.Display.setTextSize(1);
+    M5.Display.fillRect(0, logStartY, w, h - logStartY, COLOR_BG);
+    M5.Display.setTextColor(COLOR_MIDI_CC, COLOR_BG);
+    M5.Display.setTextSize(1);
     
     // Display most recent MIDI messages (reverse order)
     int displayLine = 0;
@@ -286,8 +286,8 @@ void updateDisplay() {
       if (midiLog[logIdx].text[0] != '\0') {
         int y = logStartY + (displayLine * lineHeight);
         if (y + lineHeight <= h) {
-          AtomS3.Display.setCursor(2, y);
-          AtomS3.Display.print(midiLog[logIdx].text);
+          M5.Display.setCursor(2, y);
+          M5.Display.print(midiLog[logIdx].text);
           displayLine++;
         }
       }
