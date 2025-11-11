@@ -1,0 +1,13 @@
+[project]
+name = "leslieleds-controller"
+version = "0.1.0"
+description = "MIDI controller for LeslieLEDs"
+requires-python = ">=3.10"
+dependencies = [
+    "dearpygui>=1.11.1",
+    "python-rtmidi>=1.5.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,4 +1,5 @@
 #include "led_controller.h"
+#include "display_handler.h"
 
 // ColorRGBW implementation
 void ColorRGBW::fromHSV(uint8_t hue, uint8_t sat, uint8_t val, uint8_t white) {
@@ -13,14 +14,17 @@ void ColorRGBW::fromHSV(uint8_t hue, uint8_t sat, uint8_t val, uint8_t white) {
 
 // LEDController implementation
 LEDController::LEDController() 
-    : _currentMode(ANIM_SOLID)
+    : _displayHandler(nullptr)
+    , _currentMode(ANIM_SOLID)
     , _masterBrightness(LED_BRIGHTNESS)
     , _animationSpeed(64)
+    , _animationCtrl(0)
     , _strobeRate(0)
     , _blendMode(0)
-    , _mirror(false)
-    , _reverse(false)
-    , _segmentSize(10)
+    , _mirror(MIRROR_NONE)
+    , _direction(DIR_FORWARD)
+    , _waveform(WAVE_SINE)
+    , _sceneSaveMode(false)
     , _lastUpdate(0)
     , _frameCount(0)
     , _fpsTimer(0)
@@ -40,12 +44,55 @@ void LEDController::begin() {
     FastLED.clear();
     FastLED.show();
     
+    // Boot test sequence - RGBW test on first 10 LEDs
+    const int testLEDs = min(10, LED_COUNT);
+    
+    // RED test
+    FastLED.clear();
+    for(int i = 0; i < testLEDs; i++) {
+        _leds[i] = CRGB::Red;
+    }
+    FastLED.show();
+    delay(500);
+    
+    // GREEN test
+    FastLED.clear();
+    for(int i = 0; i < testLEDs; i++) {
+        _leds[i] = CRGB::Green;
+    }
+    FastLED.show();
+    delay(500);
+    
+    // BLUE test
+    FastLED.clear();
+    for(int i = 0; i < testLEDs; i++) {
+        _leds[i] = CRGB::Blue;
+    }
+    FastLED.show();
+    delay(500);
+    
+    // WHITE test (for SK6812 RGBW - RGB all on)
+    FastLED.clear();
+    for(int i = 0; i < testLEDs; i++) {
+        _leds[i] = CRGB::White;
+    }
+    FastLED.show();
+    delay(500);
+    
+    // Clear and continue
+    FastLED.clear();
+    FastLED.show();
+    
     initDefaultScenes();
     
     #if DEBUG_MODE
     Serial.println("LED Controller initialized with RMT");
     Serial.printf("Strip: %d LEDs on GPIO %d\n", LED_COUNT, LED_DATA_PIN);
     #endif
+}
+
+void LEDController::setDisplayHandler(DisplayHandler* display) {
+    _displayHandler = display;
 }
 
 void LEDController::update() {
@@ -68,7 +115,7 @@ void LEDController::update() {
         case ANIM_DUAL_SOLID:   renderDualSolid(); break;
         case ANIM_CHASE:        renderChase(); break;
         case ANIM_DASH:         renderDash(); break;
-        case ANIM_STROBE:       renderStrobe(); break;
+        case ANIM_WAVEFORM:     renderWaveform(); break;
         case ANIM_PULSE:        renderPulse(); break;
         case ANIM_RAINBOW:      renderRainbow(); break;
         case ANIM_SPARKLE:      renderSparkle(); break;
@@ -76,8 +123,13 @@ void LEDController::update() {
     }
     
     // Apply effects
-    if (_mirror) {
+    if (_mirror != MIRROR_NONE) {
         applyMirror();
+    }
+    
+    // Apply strobe overlay if enabled
+    if (_strobeRate > 0) {
+        applyStrobeOverlay();
     }
     
     // Update LEDs
@@ -90,6 +142,7 @@ void LEDController::update() {
 void LEDController::handleGlobalCC(byte controller, byte value) {
     switch (controller) {
         case CC_MASTER_BRIGHTNESS:
+            // CC1 uses full 0-255 range
             _masterBrightness = map(value, 0, 127, 0, 255);
             FastLED.setBrightness(_masterBrightness);
             break;
@@ -98,11 +151,19 @@ void LEDController::handleGlobalCC(byte controller, byte value) {
             _animationSpeed = value;
             break;
             
+        case CC_ANIMATION_CTRL:
+            _animationCtrl = value;
+            // For ANIM_WAVEFORM: select waveform type
+            if (_currentMode == ANIM_WAVEFORM) {
+                if (value < 32) _waveform = WAVE_SINE;
+                else if (value < 64) _waveform = WAVE_TRIANGLE;
+                else if (value < 96) _waveform = WAVE_SQUARE;
+                else _waveform = WAVE_SAWTOOTH;
+            }
+            break;
+            
         case CC_STROBE_RATE:
             _strobeRate = value;
-            if (value > 0 && _currentMode != ANIM_STROBE) {
-                _currentMode = ANIM_STROBE;
-            }
             break;
             
         case CC_BLEND_MODE:
@@ -110,21 +171,42 @@ void LEDController::handleGlobalCC(byte controller, byte value) {
             break;
             
         case CC_MIRROR_MODE:
-            _mirror = (value > 63);
+            // 0-25=none, 26-50=full, 51-75=split2, 76-100=split3, 101-127=split4
+            if (value <= 25) _mirror = MIRROR_NONE;
+            else if (value <= 50) _mirror = MIRROR_FULL;
+            else if (value <= 75) _mirror = MIRROR_SPLIT2;
+            else if (value <= 100) _mirror = MIRROR_SPLIT3;
+            else _mirror = MIRROR_SPLIT4;
             break;
             
-        case CC_REVERSE:
-            _reverse = (value > 63);
-            break;
-            
-        case CC_SEGMENT_SIZE:
-            _segmentSize = map(value, 0, 127, 1, LED_COUNT / 4);
+        case CC_DIRECTION:
+            // 0-25=forward, 26-50=backward, 51-75=pingpong, 76-100=random
+            if (value <= 25) _direction = DIR_FORWARD;
+            else if (value <= 50) _direction = DIR_BACKWARD;
+            else if (value <= 75) _direction = DIR_PINGPONG;
+            else if (value <= 100) _direction = DIR_RANDOM;
             break;
             
         case CC_ANIMATION_MODE:
-            if (value < ANIM_MODE_COUNT * 13) { // Map 0-127 to modes
-                _currentMode = (AnimationMode)(value / 13);
+            // 0=none, 1-9=mode0, 10-19=mode1, 20-29=mode2, etc.
+            if (value == 0) {
+                // No animation - blackout
+                FastLED.clear();
+            } else if (value < 10) {
+                _currentMode = ANIM_SOLID;
+            } else {
+                uint8_t mode = (value - 1) / 10;
+                if (mode < ANIM_MODE_COUNT) {
+                    _currentMode = (AnimationMode)mode;
+                }
             }
+            break;
+            
+        case CC_SCENE_SAVE_MODE:
+            _sceneSaveMode = (value > 37);  // Threshold to prevent knob drift
+            #if DEBUG_MODE
+            Serial.printf("Scene save mode: %s (CC127=%d)\n", _sceneSaveMode ? "ON" : "OFF", value);
+            #endif
             break;
     }
 }
@@ -143,8 +225,8 @@ void LEDController::handleColorCC(uint8_t colorBank, byte controller, byte value
         hue = &hueB; sat = &satB; val = &valB; white = &whiteB;
     }
     
-    // Color A: CC 20-23, Color B: CC 40-43
-    uint8_t baseCC = (colorBank == 0) ? 20 : 40;
+    // Color A: CC 20-23, Color B: CC 30-33
+    uint8_t baseCC = (colorBank == 0) ? CC_COLOR_A_HUE : CC_COLOR_B_HUE;
     
     switch (controller) {
         case CC_COLOR_A_HUE:
@@ -184,7 +266,32 @@ void LEDController::handleNoteOn(byte note, byte velocity) {
     // Scene triggers
     uint8_t sceneIndex = note - NOTE_SCENE_1;
     if (sceneIndex < MAX_SCENES) {
-        loadScene(sceneIndex);
+        if (_sceneSaveMode) {
+            // Save mode: save current state to scene
+            saveCurrentAsScene(sceneIndex);
+            
+            // Show notification on display
+            if (_displayHandler) {
+                _displayHandler->showSceneNotification(sceneIndex, true);
+            }
+            
+            // Flash LEDs briefly to confirm save
+            CRGB originalColor = _leds[0];
+            fill_solid(_leds, LED_COUNT, CRGB::Green);
+            FastLED.show();
+            delay(100);
+            fill_solid(_leds, LED_COUNT, CRGB::Black);
+            FastLED.show();
+            delay(50);
+        } else {
+            // Normal mode: load scene
+            loadScene(sceneIndex);
+            
+            // Show notification on display
+            if (_displayHandler) {
+                _displayHandler->showSceneNotification(sceneIndex, false);
+            }
+        }
     }
 }
 
@@ -229,8 +336,27 @@ void LEDController::renderDualSolid() {
 }
 
 void LEDController::renderChase() {
+    uint16_t segmentSize = map(_animationCtrl, 0, 127, 1, LED_COUNT / 4);
     uint16_t pos = (_animationPhase >> 8) % LED_COUNT;
-    if (_reverse) pos = LED_COUNT - 1 - pos;
+    
+    // Apply direction
+    switch (_direction) {
+        case DIR_BACKWARD:
+            pos = LED_COUNT - 1 - pos;
+            break;
+        case DIR_PINGPONG:
+            // Snap back to start after reaching end
+            if (((_animationPhase >> 8) / LED_COUNT) % 2 == 1) {
+                pos = 0; // Snap back
+            }
+            break;
+        case DIR_RANDOM:
+            pos = random16(LED_COUNT);
+            break;
+        case DIR_FORWARD:
+        default:
+            break;
+    }
     
     // Fade all
     for (uint16_t i = 0; i < LED_COUNT; i++) {
@@ -238,18 +364,36 @@ void LEDController::renderChase() {
     }
     
     // Draw chase
-    for (uint8_t i = 0; i < _segmentSize && pos + i < LED_COUNT; i++) {
+    for (uint8_t i = 0; i < segmentSize && pos + i < LED_COUNT; i++) {
         setPixelRGBW(pos + i, _colorA);
     }
 }
 
 void LEDController::renderDash() {
-    uint16_t offset = (_animationPhase >> 8) % (_segmentSize * 2);
-    if (_reverse) offset = (_segmentSize * 2) - offset;
+    uint16_t segmentSize = map(_animationCtrl, 0, 127, 1, LED_COUNT / 4);
+    uint16_t offset = (_animationPhase >> 8) % (segmentSize * 2);
+    
+    // Apply direction
+    switch (_direction) {
+        case DIR_BACKWARD:
+            offset = (segmentSize * 2) - offset;
+            break;
+        case DIR_PINGPONG:
+            if (((_animationPhase >> 8) / (segmentSize * 2)) % 2 == 1) {
+                offset = 0; // Snap back
+            }
+            break;
+        case DIR_RANDOM:
+            offset = random16(segmentSize * 2);
+            break;
+        case DIR_FORWARD:
+        default:
+            break;
+    }
     
     for (uint16_t i = 0; i < LED_COUNT; i++) {
-        uint16_t pos = (i + offset) % (_segmentSize * 2);
-        if (pos < _segmentSize) {
+        uint16_t pos = (i + offset) % (segmentSize * 2);
+        if (pos < segmentSize) {
             setPixelRGBW(i, _colorA);
         } else {
             setPixelRGBW(i, _colorB);
@@ -257,22 +401,35 @@ void LEDController::renderDash() {
     }
 }
 
-void LEDController::renderStrobe() {
-    if (_strobeRate == 0) {
-        renderSolid();
-        return;
+void LEDController::renderWaveform() {
+    uint8_t phase = (_animationPhase >> 8) & 0xFF;
+    
+    // Calculate waveform value based on type (selected via CC3)
+    uint8_t waveValue = 0;
+    switch (_waveform) {
+        case WAVE_SINE:
+            waveValue = sin8(phase);
+            break;
+        case WAVE_TRIANGLE:
+            waveValue = (phase < 128) ? (phase * 2) : (255 - (phase - 128) * 2);
+            break;
+        case WAVE_SQUARE:
+            waveValue = (phase < 128) ? 255 : 0;
+            break;
+        case WAVE_SAWTOOTH:
+            waveValue = phase;
+            break;
     }
     
-    // Strobe frequency based on _strobeRate
-    uint16_t period = map(_strobeRate, 1, 127, 500, 20); // ms between flashes
-    bool on = (millis() % period) < (period / 10); // 10% duty cycle
+    // Apply waveform to color
+    ColorRGBW waved = _colorA;
+    waved.r = scale8(waved.r, waveValue);
+    waved.g = scale8(waved.g, waveValue);
+    waved.b = scale8(waved.b, waveValue);
+    waved.w = scale8(waved.w, waveValue);
     
-    if (on) {
-        for (uint16_t i = 0; i < LED_COUNT; i++) {
-            setPixelRGBW(i, _colorA);
-        }
-    } else {
-        FastLED.clear();
+    for (uint16_t i = 0; i < LED_COUNT; i++) {
+        setPixelRGBW(i, waved);
     }
 }
 
@@ -295,7 +452,25 @@ void LEDController::renderRainbow() {
     
     for (uint16_t i = 0; i < LED_COUNT; i++) {
         uint8_t hue = offset + (i * 255 / LED_COUNT);
-        if (_reverse) hue = 255 - hue;
+        
+        // Apply direction
+        switch (_direction) {
+            case DIR_BACKWARD:
+                hue = 255 - hue;
+                break;
+            case DIR_PINGPONG:
+                if (((_animationPhase >> 16) % 2) == 1) {
+                    hue = offset; // Snap back
+                }
+                break;
+            case DIR_RANDOM:
+                hue = random8();
+                break;
+            case DIR_FORWARD:
+            default:
+                break;
+        }
+        
         ColorRGBW rainbow;
         rainbow.fromHSV(hue, 255, 255, 0);
         setPixelRGBW(i, rainbow);
@@ -334,9 +509,98 @@ void LEDController::setPixelRGBW(uint16_t index, const ColorRGBW& color) {
 }
 
 void LEDController::applyMirror() {
-    uint16_t half = LED_COUNT / 2;
-    for (uint16_t i = 0; i < half; i++) {
-        _leds[LED_COUNT - 1 - i] = _leds[i];
+    switch (_mirror) {
+        case MIRROR_NONE:
+            return;
+            
+        case MIRROR_FULL:
+            {
+                uint16_t half = LED_COUNT / 2;
+                for (uint16_t i = 0; i < half; i++) {
+                    _leds[LED_COUNT - 1 - i] = _leds[i];
+                }
+            }
+            break;
+            
+        case MIRROR_SPLIT2:
+            {
+                // Quarter segments with even ones reversed
+                uint16_t quarter = LED_COUNT / 4;
+                for (uint16_t seg = 0; seg < 4; seg++) {
+                    uint16_t start = seg * quarter;
+                    if (seg % 2 == 1) {
+                        // Reverse even segments
+                        for (uint16_t i = 0; i < quarter / 2; i++) {
+                            CRGB temp = _leds[start + i];
+                            _leds[start + i] = _leds[start + quarter - 1 - i];
+                            _leds[start + quarter - 1 - i] = temp;
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case MIRROR_SPLIT3:
+            {
+                // Sixth segments with even ones reversed
+                uint16_t sixth = LED_COUNT / 6;
+                for (uint16_t seg = 0; seg < 6; seg++) {
+                    uint16_t start = seg * sixth;
+                    if (seg % 2 == 1) {
+                        // Reverse even segments
+                        for (uint16_t i = 0; i < sixth / 2; i++) {
+                            CRGB temp = _leds[start + i];
+                            _leds[start + i] = _leds[start + sixth - 1 - i];
+                            _leds[start + sixth - 1 - i] = temp;
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case MIRROR_SPLIT4:
+            {
+                // Eighth segments with even ones reversed
+                uint16_t eighth = LED_COUNT / 8;
+                for (uint16_t seg = 0; seg < 8; seg++) {
+                    uint16_t start = seg * eighth;
+                    if (seg % 2 == 1) {
+                        // Reverse even segments
+                        for (uint16_t i = 0; i < eighth / 2; i++) {
+                            CRGB temp = _leds[start + i];
+                            _leds[start + i] = _leds[start + eighth - 1 - i];
+                            _leds[start + eighth - 1 - i] = temp;
+                        }
+                    }
+                }
+            }
+            break;
+    }
+}
+
+void LEDController::applyStrobeOverlay() {
+    if (_strobeRate == 0) return;
+    
+    // Strobe frequency based on _strobeRate (CC4)
+    uint16_t period = map(_strobeRate, 1, 127, 500, 20); // ms between flashes
+    uint16_t timeInPeriod = millis() % period;
+    
+    // PWM dimming - diminishing duty cycle
+    uint8_t dimFactor = 255;
+    if (timeInPeriod < (period / 10)) {
+        // Flash on for 10% of period
+        dimFactor = 255;
+    } else if (timeInPeriod < (period / 5)) {
+        // Fade out for next 10%
+        dimFactor = map(timeInPeriod, period / 10, period / 5, 255, 0);
+    } else {
+        // Off for remaining time
+        dimFactor = 0;
+    }
+    
+    // Apply dimming to all LEDs
+    for (uint16_t i = 0; i < LED_COUNT; i++) {
+        _leds[i].nscale8(dimFactor);
     }
 }
 
@@ -360,26 +624,38 @@ void LEDController::initDefaultScenes() {
     _scenes[0].mode = ANIM_SOLID;
     _scenes[0].colorA.fromHSV(0, 255, 255, 0);
     _scenes[0].speed = 64;
+    _scenes[0].mirror = MIRROR_NONE;
+    _scenes[0].direction = DIR_FORWARD;
     
     // Scene 2: Blue solid
     _scenes[1].mode = ANIM_SOLID;
     _scenes[1].colorA.fromHSV(160, 255, 255, 0);
     _scenes[1].speed = 64;
+    _scenes[1].mirror = MIRROR_NONE;
+    _scenes[1].direction = DIR_FORWARD;
     
     // Scene 3: Rainbow chase
     _scenes[2].mode = ANIM_RAINBOW;
     _scenes[2].speed = 32;
+    _scenes[2].mirror = MIRROR_NONE;
+    _scenes[2].direction = DIR_FORWARD;
     
     // Scene 4: Red/Blue dash
     _scenes[3].mode = ANIM_DASH;
     _scenes[3].colorA.fromHSV(0, 255, 255, 0);
     _scenes[3].colorB.fromHSV(160, 255, 255, 0);
     _scenes[3].speed = 64;
-    _scenes[3].segmentSize = 20;
+    _scenes[3].animationCtrl = 40;  // Segment size via CC3
+    _scenes[3].mirror = MIRROR_NONE;
+    _scenes[3].direction = DIR_FORWARD;
     
-    // Scene 5: White strobe
-    _scenes[4].mode = ANIM_STROBE;
+    // Scene 5: White waveform (sine wave)
+    _scenes[4].mode = ANIM_WAVEFORM;
     _scenes[4].colorA = ColorRGBW(255, 255, 255, 255);
+    _scenes[4].speed = 32;
+    _scenes[4].animationCtrl = 0;  // Sine wave via CC3
+    _scenes[4].mirror = MIRROR_NONE;
+    _scenes[4].direction = DIR_FORWARD;
     
     // Scene 6-10: User configurable (copy scene 1 as default)
     for (uint8_t i = 5; i < MAX_SCENES; i++) {
@@ -397,8 +673,8 @@ void LEDController::loadScene(uint8_t sceneIndex) {
     _animationSpeed = scene.speed;
     _blendMode = scene.blendMode;
     _mirror = scene.mirror;
-    _reverse = scene.reverse;
-    _segmentSize = scene.segmentSize;
+    _direction = scene.direction;
+    _animationCtrl = scene.animationCtrl;
     _currentScene = sceneIndex;
     
     #if DEBUG_MODE
@@ -416,8 +692,8 @@ void LEDController::saveCurrentAsScene(uint8_t sceneIndex) {
     scene.speed = _animationSpeed;
     scene.blendMode = _blendMode;
     scene.mirror = _mirror;
-    scene.reverse = _reverse;
-    scene.segmentSize = _segmentSize;
+    scene.direction = _direction;
+    scene.animationCtrl = _animationCtrl;
     
     #if DEBUG_MODE
     Serial.printf("Saved current state to scene %d\n", sceneIndex + 1);

@@ -13,6 +13,10 @@ MIDIHandler::MIDIHandler()
 }
 
 void MIDIHandler::begin() {
+    // Set USB device name before starting
+    USB.productName(MIDI_DEVICE_NAME);
+    USB.manufacturerName("LeslieLEDs");
+    
     _midi.begin();
     USB.begin();
     updateLastMessage("MIDI Ready");
@@ -71,14 +75,17 @@ void MIDIHandler::handleControlChange(byte channel, byte controller, byte value)
     if (controller >= 0 && controller <= 19) {
         // Global controls
         _ledController->handleGlobalCC(controller, value);
-    } else if (controller >= 20 && controller <= 39) {
-        // Color A controls
+    } else if (controller >= 20 && controller <= 29) {
+        // Color A controls (CC20-29)
         _ledController->handleColorCC(0, controller, value);
-    } else if (controller >= 40 && controller <= 59) {
-        // Color B controls
+    } else if (controller >= 30 && controller <= 39) {
+        // Color B controls (CC30-39)
         _ledController->handleColorCC(1, controller, value);
+    } else if (controller == CC_SCENE_SAVE_MODE) {
+        // Scene save modifier (CC127)
+        _ledController->handleGlobalCC(controller, value);
     }
-    // CC 60+ reserved for future features
+    // CC 40-126 reserved for future features
 }
 
 void MIDIHandler::handleNoteOn(byte channel, byte note, byte velocity) {

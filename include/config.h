@@ -9,38 +9,48 @@
 
 // MIDI CC Mappings - Channel 1
 // Global Controls (CC 0-19)
-#define CC_MASTER_BRIGHTNESS 1      // Master brightness (0-127)
-#define CC_ANIMATION_SPEED 2        // Animation speed multiplier
-#define CC_STROBE_RATE 3            // Strobe rate (0=off)
-#define CC_BLEND_MODE 4             // How colors A/B blend (0-127)
-#define CC_MIRROR_MODE 5            // Mirror effect (0=off, >0=on)
-#define CC_REVERSE 6                // Reverse animation direction
-#define CC_SEGMENT_SIZE 7           // Size of dashing segments
-#define CC_ANIMATION_MODE 8         // Animation mode selector (0-127)
+#define CC_MASTER_BRIGHTNESS 1      // Master brightness (0-255 full range)
+#define CC_ANIMATION_SPEED 2        // Animation speed multiplier (0-127)
+#define CC_ANIMATION_CTRL 3         // Animation-specific control (usage varies per mode)
+#define CC_STROBE_RATE 4            // Strobe overlay rate (0=off, 1-127=faster)
+#define CC_BLEND_MODE 5             // Color blend (0=hard split, 127=smooth gradient)
+#define CC_MIRROR_MODE 6            // Mirror (0-25=none, 26-50=full, 51-75=split2, 76-100=split3, 101-127=split4)
+#define CC_DIRECTION 7              // Direction (0-25=forward, 26-50=backward, 51-75=pingpong, 76-100=random, 101-127=reserved)
+#define CC_ANIMATION_MODE 8         // Animation mode (0=none, 1-9=mode0, 10-19=mode1, 20-29=mode2, etc.)
 // CC 9-19 reserved for future global controls
 
-// Color A Controls (CC 20-39)
+// Color A Controls (CC 20-29)
 #define CC_COLOR_A_HUE 20           // Color A Hue (0-127 mapped to 0-255)
 #define CC_COLOR_A_SATURATION 21    // Color A Saturation (0-127 mapped to 0-255)
 #define CC_COLOR_A_VALUE 22         // Color A Value/Brightness (0-127 mapped to 0-255)
 #define CC_COLOR_A_WHITE 23         // Color A White channel for RGBW (0-127)
-// CC 24-39 reserved for future Color A controls
+// CC 24-29 reserved for future Color A controls
 
-// Color B Controls (CC 40-59)
-#define CC_COLOR_B_HUE 40           // Color B Hue (0-127 mapped to 0-255)
-#define CC_COLOR_B_SATURATION 41    // Color B Saturation (0-127 mapped to 0-255)
-#define CC_COLOR_B_VALUE 42         // Color B Value/Brightness (0-127 mapped to 0-255)
-#define CC_COLOR_B_WHITE 43         // Color B White channel for RGBW (0-127)
-// CC 44-59 reserved for future Color B controls
+// Color B Controls (CC 30-39)
+#define CC_COLOR_B_HUE 30           // Color B Hue (0-127 mapped to 0-255)
+#define CC_COLOR_B_SATURATION 31    // Color B Saturation (0-127 mapped to 0-255)
+#define CC_COLOR_B_VALUE 32         // Color B Value/Brightness (0-127 mapped to 0-255)
+#define CC_COLOR_B_WHITE 33         // Color B White channel for RGBW (0-127)
+// CC 24-29 reserved for future Color A controls
 
-// Effects/Modulation (CC 60-79) - Reserved for future
-// CC 60-79 reserved for future effects
+// Color B Controls (CC 30-39)
+#define CC_COLOR_B_HUE 30           // Color B Hue (0-127 mapped to 0-255)
+#define CC_COLOR_B_SATURATION 31    // Color B Saturation (0-127 mapped to 0-255)
+#define CC_COLOR_B_VALUE 32         // Color B Value/Brightness (0-127 mapped to 0-255)
+#define CC_COLOR_B_WHITE 33         // Color B White channel for RGBW (0-127)
+// CC 34-39 reserved for future Color B controls
+
+// Effects/Modulation (CC 40-79) - Reserved for future
+// CC 40-79 reserved for future effects
 
 // User/Custom (CC 80-99) - Reserved for future
 // CC 80-99 reserved for user-defined controls
 
 // System (CC 100-119) - Reserved for future
 // CC 100-119 reserved for system controls
+
+// Scene Save Modifier (CC 127)
+#define CC_SCENE_SAVE_MODE 127      // Scene save modifier (0=load mode, >0=save mode)
 
 // MIDI Notes for Scene Triggers (any channel)
 #define NOTE_SCENE_1 36             // C1 - Scene preset 1
@@ -80,8 +90,8 @@ enum AnimationMode {
     ANIM_DUAL_SOLID,            // Two colors (A/B split or blend)
     ANIM_CHASE,                 // Chase/running lights
     ANIM_DASH,                  // Dashing/alternating segments
-    ANIM_STROBE,                // Strobe effect
-    ANIM_PULSE,                 // Breathing/pulsing
+    ANIM_WAVEFORM,              // Waveform pulse (sine/triangle/square/sawtooth - select via CC3)
+    ANIM_PULSE,                 // Simple breathing/pulsing
     ANIM_RAINBOW,               // Rainbow cycle
     ANIM_SPARKLE,               // Random sparkles
     ANIM_CUSTOM_1,              // Reserved for custom

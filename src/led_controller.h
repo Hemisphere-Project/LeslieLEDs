@@ -5,6 +5,34 @@
 #include <FastLED.h>
 #include "config.h"
 
+// Forward declarations
+class DisplayHandler;
+
+// Mirror modes
+enum MirrorMode {
+    MIRROR_NONE = 0,        // No mirroring
+    MIRROR_FULL,            // Full strip mirror
+    MIRROR_SPLIT2,          // Quarter segments with alternating reverse
+    MIRROR_SPLIT3,          // Sixth segments with alternating reverse
+    MIRROR_SPLIT4           // Eighth segments with alternating reverse
+};
+
+// Direction modes
+enum DirectionMode {
+    DIR_FORWARD = 0,        // Normal forward direction
+    DIR_BACKWARD,           // Reversed direction
+    DIR_PINGPONG,           // Back and forth (snap back to start)
+    DIR_RANDOM              // Random frame in animation
+};
+
+// Waveform types for ANIM_WAVEFORM
+enum WaveformType {
+    WAVE_SINE = 0,          // Smooth sine wave
+    WAVE_TRIANGLE,          // Linear triangle wave
+    WAVE_SQUARE,            // Hard on/off square wave
+    WAVE_SAWTOOTH           // Linear ramp sawtooth
+};
+
 // Color structure for RGBW
 struct ColorRGBW {
     uint8_t r, g, b, w;
@@ -24,9 +52,9 @@ struct ScenePreset {
     ColorRGBW colorB;
     uint8_t speed;
     uint8_t blendMode;
-    bool mirror;
-    bool reverse;
-    uint8_t segmentSize;
+    MirrorMode mirror;
+    DirectionMode direction;
+    uint8_t animationCtrl;
 };
 
 class LEDController {
@@ -42,6 +70,9 @@ public:
     void handleNoteOn(byte note, byte velocity);
     void handleNoteOff(byte note);
     
+    // Display handler
+    void setDisplayHandler(DisplayHandler* display);
+    
     // Getters for display
     uint8_t getMasterBrightness() const { return _masterBrightness; }
     AnimationMode getCurrentMode() const { return _currentMode; }
@@ -49,9 +80,11 @@ public:
     const ColorRGBW& getColorA() const { return _colorA; }
     const ColorRGBW& getColorB() const { return _colorB; }
     uint32_t getFPS() const { return _fps; }
+    const CRGB* getLEDs() const { return _leds; }
 
 private:
     CRGB _leds[LED_COUNT];
+    DisplayHandler* _displayHandler;
     
     // Animation state
     AnimationMode _currentMode;
@@ -59,11 +92,13 @@ private:
     ColorRGBW _colorB;
     uint8_t _masterBrightness;
     uint8_t _animationSpeed;
+    uint8_t _animationCtrl;
     uint8_t _strobeRate;
     uint8_t _blendMode;
-    bool _mirror;
-    bool _reverse;
-    uint8_t _segmentSize;
+    MirrorMode _mirror;
+    DirectionMode _direction;
+    WaveformType _waveform;
+    bool _sceneSaveMode;
     
     // Timing
     unsigned long _lastUpdate;
@@ -81,7 +116,7 @@ private:
     void renderDualSolid();
     void renderChase();
     void renderDash();
-    void renderStrobe();
+    void renderWaveform();
     void renderPulse();
     void renderRainbow();
     void renderSparkle();
@@ -89,6 +124,7 @@ private:
     // Utility
     void setPixelRGBW(uint16_t index, const ColorRGBW& color);
     void applyMirror();
+    void applyStrobeOverlay();
     void applyBrightness();
     void calculateFPS();
     

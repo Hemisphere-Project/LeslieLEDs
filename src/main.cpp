@@ -44,6 +44,7 @@ void setup() {
   midiHandler.setLEDController(&ledController);
   midiHandler.setDisplayHandler(&displayHandler);
   displayHandler.setLEDController(&ledController);
+  ledController.setDisplayHandler(&displayHandler);
   
   // Initialize button
   pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -58,6 +59,11 @@ void setup() {
 // ========================================
 void loop() {
   M5.update();
+  
+  // Handle button press for page switching
+  if (M5.BtnA.wasPressed()) {
+    displayHandler.handleButtonPress();
+  }
   
   // Handle MIDI input
   midiHandler.update();

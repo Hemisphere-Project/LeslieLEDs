@@ -14,8 +14,11 @@ MIDI-controlled RGBW LED strip lighting system for live music performances.
 
 - 🎵 Single-channel MIDI control (optimized for Ableton Live)
 - 🎨 Dual-color RGBW support (Color A + Color B)
-- ⚡ 8 built-in animation modes
+- ⚡ 8 built-in animation modes (+ waveform variations)
 - 🎭 10 scene presets (Note triggers)
+- 💫 Global strobe overlay (applies to any animation)
+- 🪞 5-level mirror modes (none/full/split2/split3/split4)
+- ➡️ 4 direction modes (forward/backward/pingpong/random)
 - 📊 Real-time FPS monitoring on display
 - 🔄 Non-blocking RMT driver for smooth operation
 
@@ -76,8 +79,8 @@ Extract: channel, CC#, value
      ↓
 Route by CC# range:
   • CC 0-19   → Global controls
-  • CC 20-39  → Color A
-  • CC 40-59  → Color B
+  • CC 20-29  → Color A
+  • CC 30-39  → Color B
      ↓
 Call: ledController->handleGlobalCC() or handleColorCC()
 ```
@@ -112,27 +115,43 @@ Update _animationPhase based on _animationSpeed
      ↓
 Call renderer for _currentMode:
   • renderSolid()
+  • renderDualSolid()
   • renderChase()
   • renderDash()
-  • renderStrobe()
+  • renderWaveform()
   • renderPulse()
   • renderRainbow()
   • renderSparkle()
      ↓
 Apply effects:
-  • Mirror mode (copy first half to second half)
+  • Mirror mode (5 levels: none/full/split2/split3/split4)
+  • Strobe overlay (PWM dimming if CC4 > 0)
      ↓
 FastLED.show() → RMT driver → Physical LEDs
 ```
 
-### 4. Example: Chase Animation
+### 4. Example: Chase Animation with Direction
 
 ```cpp
 // Simplified from renderChase()
 void renderChase() {
-    // Calculate moving position based on phase & speed
+    uint16_t segmentSize = map(_animationCtrl, 0, 127, 1, LED_COUNT / 4);
     uint16_t pos = (_animationPhase >> 8) % LED_COUNT;
-    if (_reverse) pos = LED_COUNT - 1 - pos;
+    
+    // Apply direction mode
+    switch (_direction) {
+        case DIR_BACKWARD:
+            pos = LED_COUNT - 1 - pos;
+            break;
+        case DIR_PINGPONG:
+            if (((_animationPhase >> 8) / LED_COUNT) % 2 == 1) {
+                pos = 0; // Snap back to start
+            }
+            break;
+        case DIR_RANDOM:
+            pos = random16(LED_COUNT);
+            break;
+    }
     
     // Fade all LEDs
     for (uint16_t i = 0; i < LED_COUNT; i++) {
@@ -140,7 +159,7 @@ void renderChase() {
     }
     
     // Draw moving segment in Color A
-    for (uint8_t i = 0; i < _segmentSize && pos + i < LED_COUNT; i++) {
+    for (uint8_t i = 0; i < segmentSize && pos + i < LED_COUNT; i++) {
         setPixelRGBW(pos + i, _colorA);
     }
 }
@@ -158,7 +177,7 @@ Look up scene preset array
 Load all parameters:
   • Animation mode
   • Colors A & B
-  • Speed, blend, mirror, reverse
+  • Speed, blend, mirror, direction, animCtrl
      ↓
 Immediate switch (no fade)
 ```
@@ -237,11 +256,16 @@ CC22 = 127  → Full value
 See [MIDI_MAPPING.md](MIDI_MAPPING.md) for complete CC chart.
 
 **Quick Reference:**
-- CC1: Master Brightness
+- CC1: Master Brightness (0-255 range)
 - CC2: Animation Speed
-- CC8: Animation Mode (direct select)
+- CC3: Animation Ctrl (varies by mode)
+- CC4: Strobe Rate (global overlay)
+- CC5: Blend Mode
+- CC6: Mirror Mode (5 levels)
+- CC7: Direction (forward/backward/pingpong/random)
+- CC8: Animation Mode (0=blackout, 1-9=solid, 10-19=dual, etc.)
 - CC20-23: Color A (Hue, Sat, Val, White)
-- CC40-43: Color B (Hue, Sat, Val, White)
+- CC30-33: Color B (Hue, Sat, Val, White)
 - Notes C1-A1: Scene 1-10
 - Note C2: Blackout
 
