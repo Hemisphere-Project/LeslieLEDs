@@ -2,6 +2,39 @@
 #define CONFIG_H
 
 // ========================================
+// Platform Detection & Configuration
+// ========================================
+#if defined(PLATFORM_ATOMS3)
+    #define PLATFORM_NAME "AtomS3"
+    #define LED_DATA_PIN 2              // GPIO pin for LED strip (AtomS3 G2)
+    #define BUTTON_PIN 41               // AtomS3 built-in button
+    #define LED_BUILTIN 35              // AtomS3 built-in RGB LED (SK6812)
+    #define HAS_SMALL_DISPLAY true      // Small 128x128 display
+#elif defined(PLATFORM_M5CORE)
+    #define PLATFORM_NAME "M5Core"
+    #define LED_DATA_PIN 26             // GPIO pin for LED strip (M5Core GPIO26 - safe pin)
+    #define BUTTON_PIN 39               // M5Core center button (Button B)
+    #define LED_BUILTIN -1              // No built-in LED strip
+    #define HAS_SMALL_DISPLAY true      // Use small layout on large display
+#else
+    #error "Platform not defined! Use -DPLATFORM_ATOMS3 or -DPLATFORM_M5CORE"
+#endif
+
+// ========================================
+// Communication Mode Configuration
+// ========================================
+#if defined(USE_USB_MIDI)
+    #define COMM_MODE "USB MIDI"
+    #define MIDI_VIA_SERIAL false
+#elif defined(USE_SERIAL_MIDI)
+    #define COMM_MODE "Serial MIDI"
+    #define MIDI_VIA_SERIAL true
+    #define SERIAL_MIDI_BAUD 115200     // Baud rate for MIDI-over-Serial
+#else
+    #error "Communication mode not defined! Use -DUSE_USB_MIDI or -DUSE_SERIAL_MIDI"
+#endif
+
+// ========================================
 // MIDI Configuration
 // ========================================
 #define MIDI_DEVICE_NAME "LeslieLEDs" // USB MIDI device name
@@ -68,7 +101,7 @@
 // ========================================
 // LED Strip Configuration
 // ========================================
-#define LED_DATA_PIN 2              // GPIO pin for LED strip (AtomS3 G2)
+// LED_DATA_PIN defined per-platform above
 #define LED_COUNT 300               // Number of LEDs in the strip
 #define LED_TYPE SK6812             // LED strip type (SK6812 for RGBW)
 #define LED_COLOR_ORDER GRB         // Color order for RGB channels
@@ -100,16 +133,15 @@ enum AnimationMode {
 };
 
 // ========================================
-// AtomS3 Hardware Pins
+// Hardware Pins (Platform-specific)
 // ========================================
-#define BUTTON_PIN 41               // AtomS3 built-in button
-#define LED_BUILTIN 35              // AtomS3 built-in RGB LED (SK6812)
+// BUTTON_PIN, LED_BUILTIN defined per-platform above
 
 // ========================================
 // Debug Configuration
 // ========================================
 #define DEBUG_MODE true             // Enable/disable serial debug output
-#define SERIAL_BAUD_RATE 115200     // Serial monitor baud rate
+#define SERIAL_BAUD_RATE 115200     // Serial monitor baud rate (non-MIDI)
 
 // ========================================
 // Display Configuration

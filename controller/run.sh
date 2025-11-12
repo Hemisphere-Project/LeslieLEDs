@@ -11,7 +11,7 @@ fi
 
 # Install dependencies directly
 echo "Installing dependencies..."
-uv pip install dearpygui python-rtmidi
+uv pip install dearpygui python-rtmidi pyserial
 
 # Run the controller
 echo "Starting LeslieLEDs controller..."

@@ -2,11 +2,16 @@
 """
 LeslieLEDs MIDI Controller
 Simple DearPyGUI interface for controlling LeslieLEDs without a DAW
+Supports both USB MIDI (AtomS3) and Serial MIDI (M5Core) devices
 """
 
 import dearpygui.dearpygui as dpg
 import rtmidi
+import serial
+import serial.tools.list_ports
 from typing import Optional
+import threading
+import time
 
 # MIDI Configuration
 MIDI_CHANNEL = 0  # Channel 1 (0-indexed)
@@ -72,81 +77,221 @@ DIRECTION_MODES = [
 class LeslieLEDsController:
     def __init__(self):
         self.midi_out: Optional[rtmidi.MidiOut] = None
+        self.midi_in: Optional[rtmidi.MidiIn] = None
         self.midi_port_name: Optional[str] = None
+        self.serial_port: Optional[serial.Serial] = None
         self.scene_save_mode = False
+        self.virtual_port_thread = None
+        self.running = False
+        self.is_serial_mode = False
         
     def setup_midi(self):
-        """Initialize MIDI output"""
+        """Initialize MIDI output and virtual input"""
         self.midi_out = rtmidi.MidiOut()
         
+        # Create virtual MIDI IN port for DAW integration with custom client name
+        self.midi_in = rtmidi.MidiIn(name="LeslieCTRLs")
+        try:
+            self.midi_in.open_virtual_port("LeslieCTRLs")
+            self.running = True
+            # Start thread to forward virtual MIDI IN to output
+            self.virtual_port_thread = threading.Thread(target=self._virtual_midi_loop, daemon=True)
+            self.virtual_port_thread.start()
+        except Exception as e:
+            print(f"Could not create virtual MIDI port: {e}")
+        
+    def _virtual_midi_loop(self):
+        """Forward messages from virtual MIDI IN to output or serial"""
+        while self.running:
+            msg = self.midi_in.get_message()
+            if msg:
+                midi_message, _ = msg
+                
+                # Parse CC messages to update GUI sliders
+                if len(midi_message) == 3 and midi_message[0] == 0xB0 + MIDI_CHANNEL:
+                    cc_number = midi_message[1]
+                    cc_value = midi_message[2]
+                    # Update the GUI slider for this CC
+                    slider_id = f"cc_{cc_number}_slider"
+                    if dpg.does_item_exist(slider_id):
+                        dpg.set_value(slider_id, cc_value)
+                
+                # Forward to Serial MIDI if in serial mode, otherwise USB MIDI
+                if self.is_serial_mode:
+                    if self.serial_port and self.serial_port.is_open:
+                        self._send_serial_midi(midi_message)
+                else:
+                    if self.midi_out and self.midi_out.is_port_open():
+                        self.midi_out.send_message(midi_message)
+            time.sleep(0.001)  # Small delay to prevent CPU spinning
+        
     def get_available_ports(self):
-        """Get list of available MIDI output ports"""
-        if not self.midi_out:
-            return []
-        return self.midi_out.get_ports()
-    
-    def connect_port(self, port_index: int):
-        """Connect to a MIDI port"""
+        """Get list of available MIDI output ports and serial ports"""
+        ports = []
+        
+        # Add MIDI ports (exclude our own virtual port)
         if self.midi_out:
-            if self.midi_out.is_port_open():
-                self.midi_out.close_port()
-            self.midi_out.open_port(port_index)
-            self.midi_port_name = self.midi_out.get_ports()[port_index]
-            return True
+            midi_ports = self.midi_out.get_ports()
+            for port in midi_ports:
+                # Skip our own virtual MIDI IN port to avoid loops
+                if "RtMidiIn Client" not in port and "LeslieCTRLs" not in port:
+                    ports.append(("MIDI", port))
+        
+        # Add serial ports (look for LeslieLEDs or M5Stack devices)
+        serial_ports = serial.tools.list_ports.comports()
+        for port in serial_ports:
+            # Show port with description
+            port_label = f"Serial: {port.device}"
+            if port.description and port.description != "n/a":
+                port_label += f" ({port.description})"
+            ports.append(("SERIAL", port.device, port_label))
+        
+        return ports
+    
+    def connect_port(self, port_type: str, port_identifier):
+        """Connect to a MIDI or Serial port"""
+        # Close existing connections
+        if self.midi_out and self.midi_out.is_port_open():
+            self.midi_out.close_port()
+        if self.serial_port and self.serial_port.is_open:
+            self.serial_port.close()
+            self.serial_port = None
+        
+        if port_type == "MIDI":
+            # Connect to USB MIDI port
+            if self.midi_out:
+                midi_ports = self.midi_out.get_ports()
+                if port_identifier in midi_ports:
+                    port_index = midi_ports.index(port_identifier)
+                    self.midi_out.open_port(port_index)
+                    self.midi_port_name = port_identifier
+                    self.is_serial_mode = False
+                    return True
+        elif port_type == "SERIAL":
+            # Connect to Serial MIDI port
+            try:
+                self.serial_port = serial.Serial(
+                    port=port_identifier,
+                    baudrate=115200,
+                    timeout=0.01
+                )
+                self.midi_port_name = port_identifier
+                self.is_serial_mode = True
+                return True
+            except Exception as e:
+                print(f"Serial connection failed: {e}")
+                return False
+        
         return False
+    
+    def _send_serial_midi(self, midi_message):
+        """Send raw MIDI bytes to serial port"""
+        if self.serial_port and self.serial_port.is_open:
+            try:
+                # Send raw MIDI bytes
+                self.serial_port.write(bytes(midi_message))
+            except Exception as e:
+                print(f"Serial MIDI send error: {e}")
     
     def send_cc(self, cc_number: int, value: int):
         """Send MIDI CC message"""
-        if self.midi_out and self.midi_out.is_port_open():
-            # Clamp value to 0-127
-            value = max(0, min(127, int(value)))
-            message = [0xB0 + MIDI_CHANNEL, cc_number, value]
+        value = max(0, min(127, int(value)))
+        message = [0xB0 + MIDI_CHANNEL, cc_number, value]
+        
+        if self.is_serial_mode and self.serial_port:
+            self._send_serial_midi(message)
+        elif self.midi_out and self.midi_out.is_port_open():
             self.midi_out.send_message(message)
     
     def send_note(self, note: int, velocity: int = 127):
         """Send MIDI note on message"""
-        if self.midi_out and self.midi_out.is_port_open():
-            message = [0x90 + MIDI_CHANNEL, note, velocity]
+        message = [0x90 + MIDI_CHANNEL, note, velocity]
+        
+        if self.is_serial_mode and self.serial_port:
+            self._send_serial_midi(message)
+        elif self.midi_out and self.midi_out.is_port_open():
             self.midi_out.send_message(message)
-            # Send note off after a short time (handled by receiver)
             
     def cleanup(self):
-        """Clean up MIDI resources"""
+        """Clean up MIDI and serial resources"""
+        self.running = False
+        if self.virtual_port_thread:
+            self.virtual_port_thread.join(timeout=1.0)
         if self.midi_out and self.midi_out.is_port_open():
             self.midi_out.close_port()
+        if self.midi_in:
+            del self.midi_in
+        if self.serial_port and self.serial_port.is_open:
+            self.serial_port.close()
 
 
 # Global controller instance
 controller = LeslieLEDsController()
 
+# Global port mapping (can't store dicts in DPG value registry reliably)
+port_map = {}
+
 
 def refresh_ports():
-    """Refresh MIDI port list"""
+    """Refresh MIDI and Serial port list"""
+    global port_map
+    
     ports = controller.get_available_ports()
-    dpg.configure_item("port_combo", items=ports)
+    
+    # Create display labels
+    port_labels = []
+    port_map = {}  # Map label to (type, identifier)
+    
+    for port_info in ports:
+        if port_info[0] == "MIDI":
+            label = f"MIDI: {port_info[1]}"
+            port_labels.append(label)
+            port_map[label] = ("MIDI", port_info[1])
+        elif port_info[0] == "SERIAL":
+            label = port_info[2]  # Already formatted with description
+            port_labels.append(label)
+            port_map[label] = ("SERIAL", port_info[1])
+    
+    dpg.configure_item("port_combo", items=port_labels)
     
     # Auto-select and connect to LeslieLEDs device if found
-    for i, port in enumerate(ports):
-        if "LeslieLEDs" in port:
-            dpg.set_value("port_combo", port)
-            if controller.connect_port(i):
-                dpg.set_value("status_text", f"Connected: {port}")
+    for label in port_labels:
+        if "LeslieLEDs" in label or "M5Stack" in label:
+            dpg.set_value("port_combo", label)
+            port_type, port_id = port_map[label]
+            if controller.connect_port(port_type, port_id):
+                mode_text = "Serial MIDI" if port_type == "SERIAL" else "USB MIDI"
+                dpg.set_value("status_text", f"Connected ({mode_text}): {label}")
                 dpg.configure_item("status_text", color=(100, 255, 100))
             return
     
-    # If no LeslieLEDs found, just select first port if available
-    if ports:
-        dpg.set_value("port_combo", ports[0])
+    # If no LeslieLEDs found, try to find "USB Single Serial" port
+    for label in port_labels:
+        if "USB Single Serial" in label:
+            dpg.set_value("port_combo", label)
+            port_type, port_id = port_map[label]
+            if controller.connect_port(port_type, port_id):
+                mode_text = "Serial MIDI" if port_type == "SERIAL" else "USB MIDI"
+                dpg.set_value("status_text", f"Connected ({mode_text}): {label}")
+                dpg.configure_item("status_text", color=(100, 255, 100))
+            return
+    
+    # If no auto-select, just select first port if available
+    if port_labels:
+        dpg.set_value("port_combo", port_labels[0])
 
 
 def connect_midi(sender, app_data):
-    """Connect to selected MIDI port"""
-    port_name = dpg.get_value("port_combo")
-    ports = controller.get_available_ports()
-    if port_name in ports:
-        port_index = ports.index(port_name)
-        if controller.connect_port(port_index):
-            dpg.set_value("status_text", f"Connected: {port_name}")
+    """Connect to selected MIDI or Serial port"""
+    global port_map
+    
+    port_label = dpg.get_value("port_combo")
+    
+    if port_label and port_label in port_map:
+        port_type, port_id = port_map[port_label]
+        if controller.connect_port(port_type, port_id):
+            mode_text = "Serial MIDI" if port_type == "SERIAL" else "USB MIDI"
+            dpg.set_value("status_text", f"Connected ({mode_text}): {port_label}")
             dpg.configure_item("status_text", color=(100, 255, 100))
         else:
             dpg.set_value("status_text", "Connection failed")
@@ -211,12 +356,19 @@ def create_gui():
         
         # MIDI Connection section
         with dpg.group(horizontal=True):
-            dpg.add_text("MIDI Port:")
-            dpg.add_combo([], tag="port_combo", width=300)
+            dpg.add_text("Output Port:")
+            dpg.add_combo([], tag="port_combo", width=400, callback=connect_midi)
             dpg.add_button(label="Refresh", callback=refresh_ports)
             dpg.add_button(label="Connect", callback=connect_midi)
         
         dpg.add_text("Not connected", tag="status_text", color=(255, 100, 100))
+        
+        dpg.add_spacer(height=5)
+        with dpg.group(horizontal=True):
+            dpg.add_text("Virtual MIDI IN:", color=(100, 200, 255))
+            dpg.add_text("LeslieLEDs Controller", color=(150, 150, 150))
+        dpg.add_text("Use this port in your DAW to send MIDI", color=(120, 120, 120))
+        
         dpg.add_separator()
         
         # Global Controls
@@ -228,23 +380,23 @@ def create_gui():
             
             dpg.add_spacer(height=5)
             dpg.add_text("Master Brightness:")
-            dpg.add_slider_int(label="##brightness", default_value=128, min_value=0, max_value=255,
+            dpg.add_slider_int(label="##brightness", tag="cc_1_slider", default_value=128, min_value=0, max_value=255,
                               callback=on_cc_slider, user_data=CC_MASTER_BRIGHTNESS, width=300)
             
             dpg.add_text("Animation Speed:")
-            dpg.add_slider_int(label="##speed", default_value=64, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##speed", tag="cc_2_slider", default_value=64, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_ANIMATION_SPEED, width=300)
             
             dpg.add_text("Animation Control:")
-            dpg.add_slider_int(label="##ctrl", default_value=0, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##ctrl", tag="cc_3_slider", default_value=0, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_ANIMATION_CTRL, width=300)
             
             dpg.add_text("Strobe Rate (0=off):")
-            dpg.add_slider_int(label="##strobe", default_value=0, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##strobe", tag="cc_4_slider", default_value=0, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_STROBE_RATE, width=300)
             
             dpg.add_text("Blend Mode:")
-            dpg.add_slider_int(label="##blend", default_value=0, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##blend", tag="cc_5_slider", default_value=0, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_BLEND_MODE, width=300)
             
             dpg.add_text("Mirror Mode:")
@@ -260,19 +412,19 @@ def create_gui():
         # Color A Controls
         with dpg.collapsing_header(label="Color A (RGBW)", default_open=True):
             dpg.add_text("Hue:")
-            dpg.add_slider_int(label="##a_hue", default_value=0, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##a_hue", tag="cc_20_slider", default_value=0, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_COLOR_A_HUE, width=300)
             
             dpg.add_text("Saturation:")
-            dpg.add_slider_int(label="##a_sat", default_value=127, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##a_sat", tag="cc_21_slider", default_value=127, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_COLOR_A_SATURATION, width=300)
             
-            dpg.add_text("Value:")
-            dpg.add_slider_int(label="##a_val", default_value=127, min_value=0, max_value=127,
+            dpg.add_text("Value/Brightness:")
+            dpg.add_slider_int(label="##a_val", tag="cc_22_slider", default_value=127, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_COLOR_A_VALUE, width=300)
             
             dpg.add_text("White:")
-            dpg.add_slider_int(label="##a_white", default_value=0, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##a_white", tag="cc_23_slider", default_value=0, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_COLOR_A_WHITE, width=300)
         
         dpg.add_separator()
@@ -280,19 +432,19 @@ def create_gui():
         # Color B Controls
         with dpg.collapsing_header(label="Color B (RGBW)", default_open=True):
             dpg.add_text("Hue:")
-            dpg.add_slider_int(label="##b_hue", default_value=64, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##b_hue", tag="cc_30_slider", default_value=64, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_COLOR_B_HUE, width=300)
             
             dpg.add_text("Saturation:")
-            dpg.add_slider_int(label="##b_sat", default_value=127, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##b_sat", tag="cc_31_slider", default_value=127, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_COLOR_B_SATURATION, width=300)
             
             dpg.add_text("Value:")
-            dpg.add_slider_int(label="##b_val", default_value=127, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##b_val", tag="cc_32_slider", default_value=127, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_COLOR_B_VALUE, width=300)
             
             dpg.add_text("White:")
-            dpg.add_slider_int(label="##b_white", default_value=0, min_value=0, max_value=127,
+            dpg.add_slider_int(label="##b_white", tag="cc_33_slider", default_value=0, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_COLOR_B_WHITE, width=300)
         
         dpg.add_separator()

@@ -45,6 +45,14 @@ struct ColorRGBW {
     CRGB toCRGB() const { return CRGB(r, g, b); }
 };
 
+// CRGBW structure for raw LED data (4 bytes per pixel: G, R, B, W)
+struct CRGBW {
+    uint8_t g;
+    uint8_t r;
+    uint8_t b;
+    uint8_t w;
+};
+
 // Scene preset structure
 struct ScenePreset {
     AnimationMode mode;
@@ -80,10 +88,19 @@ public:
     const ColorRGBW& getColorA() const { return _colorA; }
     const ColorRGBW& getColorB() const { return _colorB; }
     uint32_t getFPS() const { return _fps; }
-    const CRGB* getLEDs() const { return _leds; }
+    const CRGB* getLEDs() const { 
+        // Convert CRGBW to CRGB for display preview
+        static CRGB displayBuffer[LED_COUNT];
+        for(int i = 0; i < LED_COUNT; i++) {
+            displayBuffer[i].r = _leds[i].r;
+            displayBuffer[i].g = _leds[i].g;
+            displayBuffer[i].b = _leds[i].b;
+        }
+        return displayBuffer;
+    }
 
 private:
-    CRGB _leds[LED_COUNT];
+    CRGBW _leds[LED_COUNT];  // Raw RGBW data (4 bytes per pixel)
     DisplayHandler* _displayHandler;
     
     // Animation state
@@ -123,6 +140,8 @@ private:
     
     // Utility
     void setPixelRGBW(uint16_t index, const ColorRGBW& color);
+    void clearLEDs();
+    void fadePixel(uint16_t index, uint8_t amount);
     void applyMirror();
     void applyStrobeOverlay();
     void applyBrightness();

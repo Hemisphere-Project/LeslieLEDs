@@ -38,56 +38,84 @@ LEDController::LEDController()
 }
 
 void LEDController::begin() {
-    // Configure FastLED with RMT
-    FastLED.addLeds<LED_TYPE, LED_DATA_PIN, LED_COLOR_ORDER>(_leds, LED_COUNT);
-    FastLED.setBrightness(_masterBrightness);
-    FastLED.clear();
+    // Initialize LED array to all zeros
+    clearLEDs();
+    
+    // Configure FastLED with RMT - treat as raw 4-byte data
+    FastLED.addLeds<LED_TYPE, LED_DATA_PIN>((CRGB*)_leds, LED_COUNT * 4 / 3);
+    FastLED.setBrightness(77);  // Match test firmware: 30% brightness
     FastLED.show();
     
-    // Boot test sequence - RGBW test on first 10 LEDs
-    const int testLEDs = min(10, LED_COUNT);
+    #if DEBUG_MODE
+    Serial.printf("FastLED configured: %d RGBW LEDs as %d RGB units\n", LED_COUNT, LED_COUNT * 4 / 3);
+    Serial.printf("Buffer size: %d bytes\n", LED_COUNT * 4);
+    Serial.printf("LED_DATA_PIN: %d\n", LED_DATA_PIN);
+    #endif
     
-    // RED test
-    FastLED.clear();
+    // Boot test sequence - ALL 300 LEDs to match test firmware
+    const int testLEDs = LED_COUNT;  // Test ALL LEDs, not just 10
+    
+    // RED test - ALL 300 LEDs
+    #if DEBUG_MODE
+    Serial.println("Boot test: RED");
+    #endif
+    clearLEDs();
     for(int i = 0; i < testLEDs; i++) {
-        _leds[i] = CRGB::Red;
+        _leds[i] = {0, 255, 0, 0};  // G, R, B, W
     }
     FastLED.show();
-    delay(500);
+    delay(300);  // Faster
     
-    // GREEN test
-    FastLED.clear();
+    // GREEN test - ALL 300 LEDs
+    #if DEBUG_MODE
+    Serial.println("Boot test: GREEN");
+    #endif
+    clearLEDs();
     for(int i = 0; i < testLEDs; i++) {
-        _leds[i] = CRGB::Green;
+        _leds[i] = {255, 0, 0, 0};  // G, R, B, W
     }
     FastLED.show();
-    delay(500);
+    delay(300);
     
-    // BLUE test
-    FastLED.clear();
+    // BLUE test - ALL 300 LEDs
+    #if DEBUG_MODE
+    Serial.println("Boot test: BLUE");
+    #endif
+    clearLEDs();
     for(int i = 0; i < testLEDs; i++) {
-        _leds[i] = CRGB::Blue;
+        _leds[i] = {0, 0, 255, 0};  // G, R, B, W
     }
     FastLED.show();
-    delay(500);
+    delay(300);
     
-    // WHITE test (for SK6812 RGBW - RGB all on)
-    FastLED.clear();
+    // WHITE test (W channel) - ALL 300 LEDs
+    #if DEBUG_MODE
+    Serial.println("Boot test: WHITE");
+    #endif
+    clearLEDs();
     for(int i = 0; i < testLEDs; i++) {
-        _leds[i] = CRGB::White;
+        _leds[i] = {0, 0, 0, 255};  // G, R, B, W - pure white channel
     }
     FastLED.show();
-    delay(500);
+    delay(300);
     
     // Clear and continue
-    FastLED.clear();
+    #if DEBUG_MODE
+    Serial.println("Boot test: Complete, clearing...");
+    #endif
+    clearLEDs();
     FastLED.show();
+    delay(200);
     
     initDefaultScenes();
     
+    // Restore normal brightness
+    FastLED.setBrightness(_masterBrightness);
+    
     #if DEBUG_MODE
-    Serial.println("LED Controller initialized with RMT");
+    Serial.println("LED Controller initialized");
     Serial.printf("Strip: %d LEDs on GPIO %d\n", LED_COUNT, LED_DATA_PIN);
+    Serial.printf("Default mode: ANIM_SOLID, Color A (red)\n");
     #endif
 }
 
@@ -191,7 +219,7 @@ void LEDController::handleGlobalCC(byte controller, byte value) {
             // 0=none, 1-9=mode0, 10-19=mode1, 20-29=mode2, etc.
             if (value == 0) {
                 // No animation - blackout
-                FastLED.clear();
+                clearLEDs();
             } else if (value < 10) {
                 _currentMode = ANIM_SOLID;
             } else {
@@ -258,7 +286,7 @@ void LEDController::handleColorCC(uint8_t colorBank, byte controller, byte value
 void LEDController::handleNoteOn(byte note, byte velocity) {
     // Blackout
     if (note == NOTE_BLACKOUT) {
-        FastLED.clear();
+        clearLEDs();
         FastLED.show();
         return;
     }
@@ -276,11 +304,12 @@ void LEDController::handleNoteOn(byte note, byte velocity) {
             }
             
             // Flash LEDs briefly to confirm save
-            CRGB originalColor = _leds[0];
-            fill_solid(_leds, LED_COUNT, CRGB::Green);
+            for(int i = 0; i < LED_COUNT; i++) {
+                _leds[i] = {255, 0, 0, 0};  // Green: G, R, B, W
+            }
             FastLED.show();
             delay(100);
-            fill_solid(_leds, LED_COUNT, CRGB::Black);
+            clearLEDs();
             FastLED.show();
             delay(50);
         } else {
@@ -304,6 +333,15 @@ void LEDController::handleNoteOff(byte note) {
 // ========================================
 
 void LEDController::renderSolid() {
+    static bool first = true;
+    if (first) {
+        #if DEBUG_MODE
+        Serial.printf("renderSolid: colorA R=%d G=%d B=%d W=%d\n", 
+                      _colorA.r, _colorA.g, _colorA.b, _colorA.w);
+        #endif
+        first = false;
+    }
+    
     for (uint16_t i = 0; i < LED_COUNT; i++) {
         setPixelRGBW(i, _colorA);
     }
@@ -360,7 +398,7 @@ void LEDController::renderChase() {
     
     // Fade all
     for (uint16_t i = 0; i < LED_COUNT; i++) {
-        _leds[i].fadeToBlackBy(20);
+        fadePixel(i, 20);
     }
     
     // Draw chase
@@ -480,7 +518,7 @@ void LEDController::renderRainbow() {
 void LEDController::renderSparkle() {
     // Fade all
     for (uint16_t i = 0; i < LED_COUNT; i++) {
-        _leds[i].fadeToBlackBy(10);
+        fadePixel(i, 10);
     }
     
     // Add random sparkles
@@ -498,14 +536,28 @@ void LEDController::renderSparkle() {
 void LEDController::setPixelRGBW(uint16_t index, const ColorRGBW& color) {
     if (index >= LED_COUNT) return;
     
-    // For SK6812, we only set RGB in FastLED
-    // White channel is handled by the SK6812 chipset automatically
-    // We blend white into RGB for display
-    uint8_t r = color.r + (color.w / 3);
-    uint8_t g = color.g + (color.w / 3);
-    uint8_t b = color.b + (color.w / 3);
-    
-    _leds[index] = CRGB(r, g, b);
+    // Set RGBW pixel
+    // ColorRGBW has {r, g, b, w} member order
+    // CRGBW buffer has {g, r, b, w} member order (GRB for SK6812)
+    // So we assign: buffer.g ← color.g, buffer.r ← color.r, etc.
+    _leds[index].g = color.g;
+    _leds[index].r = color.r;
+    _leds[index].b = color.b;
+    _leds[index].w = color.w;
+}
+
+void LEDController::clearLEDs() {
+    for(int i = 0; i < LED_COUNT; i++) {
+        _leds[i] = {0, 0, 0, 0};
+    }
+}
+
+void LEDController::fadePixel(uint16_t index, uint8_t amount) {
+    if (index >= LED_COUNT) return;
+    _leds[index].r = scale8(_leds[index].r, 255 - amount);
+    _leds[index].g = scale8(_leds[index].g, 255 - amount);
+    _leds[index].b = scale8(_leds[index].b, 255 - amount);
+    _leds[index].w = scale8(_leds[index].w, 255 - amount);
 }
 
 void LEDController::applyMirror() {
@@ -531,7 +583,7 @@ void LEDController::applyMirror() {
                     if (seg % 2 == 1) {
                         // Reverse even segments
                         for (uint16_t i = 0; i < quarter / 2; i++) {
-                            CRGB temp = _leds[start + i];
+                            CRGBW temp = _leds[start + i];
                             _leds[start + i] = _leds[start + quarter - 1 - i];
                             _leds[start + quarter - 1 - i] = temp;
                         }
@@ -549,7 +601,7 @@ void LEDController::applyMirror() {
                     if (seg % 2 == 1) {
                         // Reverse even segments
                         for (uint16_t i = 0; i < sixth / 2; i++) {
-                            CRGB temp = _leds[start + i];
+                            CRGBW temp = _leds[start + i];
                             _leds[start + i] = _leds[start + sixth - 1 - i];
                             _leds[start + sixth - 1 - i] = temp;
                         }
@@ -567,7 +619,7 @@ void LEDController::applyMirror() {
                     if (seg % 2 == 1) {
                         // Reverse even segments
                         for (uint16_t i = 0; i < eighth / 2; i++) {
-                            CRGB temp = _leds[start + i];
+                            CRGBW temp = _leds[start + i];
                             _leds[start + i] = _leds[start + eighth - 1 - i];
                             _leds[start + eighth - 1 - i] = temp;
                         }
@@ -600,7 +652,10 @@ void LEDController::applyStrobeOverlay() {
     
     // Apply dimming to all LEDs
     for (uint16_t i = 0; i < LED_COUNT; i++) {
-        _leds[i].nscale8(dimFactor);
+        _leds[i].r = scale8(_leds[i].r, dimFactor);
+        _leds[i].g = scale8(_leds[i].g, dimFactor);
+        _leds[i].b = scale8(_leds[i].b, dimFactor);
+        _leds[i].w = scale8(_leds[i].w, dimFactor);
     }
 }
 

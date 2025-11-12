@@ -1,15 +1,20 @@
 /*
- * Simple LED Strip Test for LeslieLEDs
- * Tests GPIO 2 with SK6812 RGBW strip
+ * Simple LED Strip Test for LeslieLEDs - M5Core Version
+ * Tests GPIO 26 with SK6812 RGBW strip
  * 
- * Upload with: pio run -e test-atoms3 -t upload
+ * Visual Status via M5Core RGB LED (GPIO 10):
+ * - Fast RED blink = Testing strip
+ * - Slow GREEN blink = Strip test complete, continuous test running
+ * - Fast BLUE blink = Waiting/heartbeat
+ * 
+ * Upload with: pio run -e test-m5core -t upload
  */
 
 #include <Arduino.h>
 #include <FastLED.h>
 
-// Configuration - Try different pins to diagnose
-#define LED_DATA_PIN 2              // AtomS3 G2 label = GPIO 2
+// Configuration for M5Core
+#define LED_DATA_PIN 26             // M5Core GPIO 26 for LED strip (safe GPIO)
 #define LED_COUNT 300               // Full 300 LED strip
 #define LED_TYPE SK6812             // SK6812 RGBW
 #define LED_COLOR_ORDER GRB         // Color order
@@ -29,16 +34,16 @@ void setup() {
   delay(1000);
   
   Serial.println("\n=================================");
-  Serial.println("LeslieLEDs - AtomS3 LED Test");
-  Serial.println("GPIO 2 - SK6812 RGBW Strip");
+  Serial.println("LeslieLEDs - M5Core LED Test");
+  Serial.println("GPIO 26 - SK6812 RGBW Strip");
   Serial.println("=================================\n");
   
   Serial.println("Starting LED strip test...");
   delay(1000);
   
-  // Initialize external RGBW strip on GPIO 2
+  // Initialize external RGBW strip on GPIO 26
   // We treat it as raw LED data (4 bytes per pixel: G, R, B, W)
-  Serial.println("Initializing RGBW strip on GPIO 2...");
+  Serial.println("Initializing RGBW strip on GPIO 26...");
   FastLED.addLeds<LED_TYPE, LED_DATA_PIN>((CRGB*)leds, LED_COUNT * 4 / 3);
   FastLED.setBrightness(77);  // 30% brightness (77/255 = ~30%)
   
