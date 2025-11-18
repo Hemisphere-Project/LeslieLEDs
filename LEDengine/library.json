@@ -1,0 +1,19 @@
+{
+  "name": "LedEngine",
+  "version": "1.0.0",
+  "description": "Shared LED animation engine for synchronized LED strip control",
+  "keywords": "led, animation, fastled, rgbw, sk6812",
+  "authors": [
+    {
+      "name": "Hemisphere-Project"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "FastLED",
+      "version": "^3.10.3"
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}
