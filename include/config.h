@@ -12,7 +12,7 @@
     #define HAS_SMALL_DISPLAY true      // Small 128x128 display
 #elif defined(PLATFORM_M5CORE)
     #define PLATFORM_NAME "M5Core"
-    #define LED_DATA_PIN 26             // GPIO pin for LED strip (M5Core GPIO26 - safe pin)
+    #define LED_DATA_PIN 21             // GPIO pin for LED strip (M5Core GPIO21)
     #define BUTTON_PIN 39               // M5Core center button (Button B)
     #define LED_BUILTIN -1              // No built-in LED strip
     #define HAS_SMALL_DISPLAY true      // Use small layout on large display
@@ -131,6 +131,50 @@ enum AnimationMode {
     ANIM_CUSTOM_2,              // Reserved for custom
     ANIM_MODE_COUNT
 };
+
+// ========================================
+// DMX Configuration
+// ========================================
+#define DMX_ENABLED true            // Enable/disable DMX output
+
+// Platform-specific DMX pins
+#if defined(PLATFORM_ATOMS3)
+    // AtomS3: M5Unit-DMX512 on PortC (GPIO5 TX, GPIO6 RX)
+    #define DMX_TX_PIN 5
+    #define DMX_RX_PIN 6
+#elif defined(PLATFORM_M5CORE)
+    // M5Core: esp_dmx on Serial2 (GPIO13 TX, GPIO35 RX, GPIO12 EN)
+    #define DMX_TX_PIN 13
+    #define DMX_RX_PIN 35
+    #define DMX_EN_PIN 12
+    #define DMX_PORT 2              // UART port number for esp_dmx
+#endif
+
+// DMX Universe configuration
+#define DMX_CHANNELS 512            // Standard DMX512 universe size
+#define DMX_UPDATE_INTERVAL_MS 25   // Update every 25ms (~40Hz refresh)
+
+// DMX Fixture Configuration
+#define DMX_CHANNELS_PER_FIXTURE 31 // Channels per fixture (reserved for future expansion)
+#define DMX_MAX_FIXTURES 16         // Maximum fixtures (16 fixtures * 31 channels = 496 channels)
+#define DMX_FIXTURE_START 1         // First fixture starts at channel 1
+
+// Pixel-to-Fixture mapping
+// Maps LED strip pixels to DMX fixtures
+// Format: {pixel_index, dmx_fixture_number}
+// Example: Fixture 1 = Pixel 0, Fixture 2 = Pixel 10, etc.
+#define DMX_PIXEL_MAPPING_COUNT 10  // Number of mapped pixels (adjustable via MIDI)
+extern uint16_t g_dmxPixelMap[DMX_MAX_FIXTURES]; // Pixel indices for each fixture
+#define DMX_TIMEOUT_TICK 1000       // Timeout for DMX send operations
+
+// DMX Fixture Channel Layout (first 6 channels of each 31-channel fixture)
+// Each fixture occupies 31 DMX channels for future expansion
+// Ch+0: Red (0-255)
+// Ch+1: Green (0-255)
+// Ch+2: Blue (0-255)
+// Ch+3: White (0-255)
+// Ch+4: Master/Dimmer (0-255)
+// Ch+5: Unused/Reserved
 
 // ========================================
 // Hardware Pins (Platform-specific)

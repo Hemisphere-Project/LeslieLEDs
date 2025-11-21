@@ -3,6 +3,7 @@
 #include "config.h"
 #include "led_controller.h"
 #include "display_handler.h"
+#include "dmx_handler.h"
 
 // Platform-specific MIDI handler
 #if MIDI_VIA_SERIAL
@@ -18,6 +19,7 @@
 // ========================================
 LEDController ledController;
 DisplayHandler displayHandler;
+DMXHandler dmxHandler;
 
 // ========================================
 // Setup
@@ -28,6 +30,14 @@ void setup() {
   cfg.clear_display = true;
   cfg.output_power = true;
   M5.begin(cfg);
+
+  // Stop I2C if using GPIO21 or GPIO22 for LED data
+  #if defined(PLATFORM_M5CORE)
+    if (LED_DATA_PIN == 21 || LED_DATA_PIN == 22) {
+      M5.In_I2C.release();  
+      pinMode(LED_DATA_PIN, OUTPUT); 
+    }
+  #endif
   
   // Initialize serial for debugging
   #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
@@ -46,6 +56,15 @@ void setup() {
   
   // Initialize LED controller
   ledController.begin();
+  
+  // Initialize DMX
+  #if DMX_ENABLED
+    dmxHandler.begin();
+    dmxHandler.setLEDController(&ledController);
+    #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
+      Serial.println("DMX handler initialized");
+    #endif
+  #endif
   
   // Initialize MIDI
   midiHandler.begin();
@@ -80,6 +99,11 @@ void loop() {
   
   // Update LED animations
   ledController.update();
+  
+  // Update DMX output
+  #if DMX_ENABLED
+    dmxHandler.update();
+  #endif
   
   // Update display
   displayHandler.update();

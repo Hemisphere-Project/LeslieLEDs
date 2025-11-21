@@ -85,6 +85,7 @@ public:
     uint8_t getMasterBrightness() const { return _masterBrightness; }
     AnimationMode getCurrentMode() const { return _currentMode; }
     uint8_t getAnimationSpeed() const { return _animationSpeed; }
+    uint8_t getStrobeRate() const { return _strobeRate; }
     const ColorRGBW& getColorA() const { return _colorA; }
     const ColorRGBW& getColorB() const { return _colorB; }
     uint32_t getFPS() const { return _fps; }
