@@ -4,9 +4,9 @@ MIDI-controlled DMX broadcaster with LED strip monitoring.
 
 ## Overview
 
-This application receives MIDI control messages (CC and Notes) and converts them to DMX frames that are broadcasted wirelessly via ESP-NOW. It also acts as the master clock for synchronizing multiple LED strip receivers.
+This application receives MIDI control messages (CC and Notes) and converts them to DMX frames that are broadcast wirelessly via ESP-NOW. It also acts as the master clock for synchronizing multiple LED strip receivers.
 
-**New**: Includes an onboard LED strip for real-time visual monitoring of the current animation state.
+**Latest**: Includes a 120-pixel RGBW preview strip plus an automatic RGBW boot sweep so wiring issues surface before DMX traffic starts.
 
 ## Features
 
@@ -14,7 +14,7 @@ This application receives MIDI control messages (CC and Notes) and converts them
   - USB MIDI (AtomS3)
   - Serial MIDI at 115200 baud (M5Core)
 - **DMX Output**: 32-channel DMX frame broadcasted via ESP-NOW
-- **LED Monitor**: Visual feedback of current state on attached LED strip
+- **LED Monitor**: Visual feedback of current state on the attached 120-pixel strip (RGBW boot sweep at startup)
 - **On-Device Display**: Multi-page preview/parameter/log interface with BtnA page toggle and scene notifications
 - **Clock Master**: Synchronizes time across all receivers using ESPNowMeshClock
 - **Scene Management**: 10 preset slots via MIDI notes 36-45
@@ -24,6 +24,8 @@ This application receives MIDI control messages (CC and Notes) and converts them
 
 - **M5Stack AtomS3**: USB MIDI native support
 - **M5Stack Core**: Serial MIDI via GPIO pins
+
+Both builds assume a 120-pixel SK6812 RGBW strip: GPIO2 on AtomS3, GPIO26 on M5Core. Override via `build_flags` if you need a different length or pin, but keep the sender and receivers aligned for identical previews.
 
 ## DMX Channel Layout
 
@@ -52,8 +54,8 @@ This application receives MIDI control messages (CC and Notes) and converts them
 ## Building
 
 ```bash
-pio run -e m5stack_atoms3  # For AtomS3
-pio run -e m5core          # For M5Core
+pio run -e m5stack_atoms3  # AtomS3 / USB MIDI / GPIO2 preview strip
+pio run -e m5core          # M5Core / Serial MIDI / GPIO26 preview strip
 ```
 
 ## Usage
@@ -64,7 +66,7 @@ pio run -e m5core          # For M5Core
 4. Power on receivers (DMXnow2Strip)
 5. Control LEDs via MIDI!
 
-MIDI messages are converted to DMX frames and broadcasted at ~30Hz. The attached LED strip displays the same animation that will appear on all receivers, providing instant visual feedback.
+MIDI messages are converted to DMX frames and broadcast at ~30 Hz. The attached LED strip displays the same animation that will appear on all receivers, providing instant visual feedback. A quick red→green→blue→white sweep runs right after boot so you can confirm the preview strip wiring before MIDI control begins.
 
 ### Display Pages
 

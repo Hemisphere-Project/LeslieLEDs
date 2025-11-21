@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "midi_processor.h"
 
 // Forward declarations
 class DMXState;
@@ -62,10 +63,8 @@ public:
     void onNoteOff(void (*callback)(uint8_t channel, uint8_t note, uint8_t velocity));
 
 private:
-    // Component references
-    DMXState* dmxState;
-    DisplayHandler* displayHandler;
-    
+    MidiProcessor _processor;
+
     // MIDI message parsing state
     uint8_t midiBuffer[3];
     uint8_t bufferIndex;
@@ -85,9 +84,6 @@ private:
     void processMIDIByte(uint8_t byte);
     void processCompleteMessage();
     uint8_t getMessageLength(uint8_t status);
-    void handleControlChange(uint8_t channel, uint8_t cc, uint8_t value);
-    void handleNoteOn(uint8_t channel, uint8_t note, uint8_t velocity);
-    void handleNoteOff(uint8_t channel, uint8_t note, uint8_t velocity);
 };
 
 #endif // SERIAL_MIDI_HANDLER_H

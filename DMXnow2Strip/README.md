@@ -9,11 +9,12 @@ This application receives DMX frames via ESP-NOW and translates them into LED st
 ## Features
 
 - **DMX Input**: Receives 32-channel DMX via ESP-NOW wireless
-- **LED Output**: Drives SK6812 RGBW LED strips (default 300 LEDs)
+- **LED Output**: Drives SK6812 RGBW LED strips (default 120 LEDs)
 - **Clock Slave**: Synchronizes animation timing with master clock
 - **Shared Engine**: Uses LedEngine library for consistent animations
 - **Animation Engine**: 8 animation modes with extensive control
 - **Atom Lite Focus**: Tuned for the M5Stack Atom Lite receiver hardware
+- **Boot Diagnostics**: Automatic RGBW sweep on startup before listening for DMX
 
 ## Hardware Support
 
@@ -32,7 +33,7 @@ This application receives DMX frames via ESP-NOW and translates them into LED st
 
 ## Configuration
 
-- Default LED data pin is **GPIO26** with **300 SK6812 RGBW** LEDs.
+- Default LED data pin is **GPIO26** with **120 SK6812 RGBW** LEDs (matches Midi2DMXnow preview strip for identical looks).
 - Override `LED_DATA_PIN` or `LED_COUNT` by adding extra `build_flags` in `platformio.ini` or via the PlatformIO CLI:  
     `pio run -e atom_lite --project-option "build_flags=-DLED_DATA_PIN=23 -DLED_COUNT=120"`
 

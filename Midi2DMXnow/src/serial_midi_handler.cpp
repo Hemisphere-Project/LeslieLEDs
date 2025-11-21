@@ -1,13 +1,8 @@
 #include "serial_midi_handler.h"
-#include "dmx_state.h"
-#include "display_handler.h"
-#include <M5Unified.h>
 
 #define CONNECTION_TIMEOUT_MS 5000
 
 SerialMIDIHandler::SerialMIDIHandler() :
-    dmxState(nullptr),
-    displayHandler(nullptr),
     bufferIndex(0),
     expectedBytes(0),
     runningStatus(0),
@@ -27,11 +22,11 @@ void SerialMIDIHandler::begin() {
 }
 
 void SerialMIDIHandler::setDMXState(DMXState* state) {
-    dmxState = state;
+    _processor.setDMXState(state);
 }
 
 void SerialMIDIHandler::setDisplayHandler(DisplayHandler* display) {
-    displayHandler = display;
+    _processor.setDisplayHandler(display);
 }
 
 void SerialMIDIHandler::update() {
@@ -110,100 +105,36 @@ void SerialMIDIHandler::processCompleteMessage() {
     
     switch (status) {
         case 0x80: // Note Off
-            handleNoteOff(channel, midiBuffer[1], midiBuffer[2]);
+            _processor.handleNoteOff(channel, midiBuffer[1], midiBuffer[2]);
+            if (noteOffCallback && channel == MIDI_CHANNEL) {
+                noteOffCallback(channel, midiBuffer[1], midiBuffer[2]);
+            }
             break;
             
         case 0x90: // Note On
-            // Note On with velocity 0 is Note Off
             if (midiBuffer[2] == 0) {
-                handleNoteOff(channel, midiBuffer[1], 0);
+                _processor.handleNoteOff(channel, midiBuffer[1], 0);
+                if (noteOffCallback && channel == MIDI_CHANNEL) {
+                    noteOffCallback(channel, midiBuffer[1], 0);
+                }
             } else {
-                handleNoteOn(channel, midiBuffer[1], midiBuffer[2]);
+                _processor.handleNoteOn(channel, midiBuffer[1], midiBuffer[2]);
+                if (noteOnCallback && channel == MIDI_CHANNEL) {
+                    noteOnCallback(channel, midiBuffer[1], midiBuffer[2]);
+                }
             }
             break;
             
         case 0xB0: // Control Change
-            handleControlChange(channel, midiBuffer[1], midiBuffer[2]);
+            _processor.handleControlChange(channel, midiBuffer[1], midiBuffer[2]);
+            if (ccCallback) {
+                ccCallback(channel, midiBuffer[1], midiBuffer[2]);
+            }
             break;
             
         // Add other message types as needed
         default:
             break;
-    }
-}
-
-void SerialMIDIHandler::handleControlChange(uint8_t channel, uint8_t cc, uint8_t value) {
-    if (!dmxState) return;
-    
-    // Route CCs to appropriate handlers
-    if (cc >= 1 && cc <= 19) {
-        // Global controls
-        dmxState->handleGlobalCC(cc, value);
-    } else if (cc >= 20 && cc <= 29) {
-        // Color A controls
-        dmxState->handleColorCC(0, cc, value);
-    } else if (cc >= 30 && cc <= 39) {
-        // Color B controls
-        dmxState->handleColorCC(1, cc, value);
-    } else if (cc >= 40 && cc <= 127) {
-        // Other controls (effects, system, etc.)
-        dmxState->handleGlobalCC(cc, value);
-    }
-    
-    // Also call registered callback if any (for display logging)
-    if (ccCallback) {
-        ccCallback(channel, cc, value);
-    }
-
-    if (displayHandler) {
-        char msg[32];
-        snprintf(msg, sizeof(msg), "CC%d=%d", cc, value);
-        displayHandler->logMessage(msg);
-    }
-}
-
-void SerialMIDIHandler::handleNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
-    if (channel != MIDI_CHANNEL) {
-        return;
-    }
-
-    DMXState::SceneEvent event = {};
-    if (dmxState) {
-        event = dmxState->handleNoteOn(note, velocity);
-    }
-    
-    // Also call registered callback if any
-    if (noteOnCallback) {
-        noteOnCallback(channel, note, velocity);
-    }
-
-    if (displayHandler) {
-        char msg[32];
-        snprintf(msg, sizeof(msg), "Note %d ON", note);
-        displayHandler->logMessage(msg);
-
-        if (event.triggered) {
-            if (event.blackout) {
-                displayHandler->logMessage("Blackout");
-            } else {
-                displayHandler->showSceneNotification(event.sceneIndex, event.saved);
-            }
-        }
-    }
-}
-
-void SerialMIDIHandler::handleNoteOff(uint8_t channel, uint8_t note, uint8_t velocity) {
-    if (channel != MIDI_CHANNEL) {
-        return;
-    }
-
-    if (dmxState) {
-        dmxState->handleNoteOff(note);
-    }
-    
-    // Also call registered callback if any
-    if (noteOffCallback) {
-        noteOffCallback(channel, note, velocity);
     }
 }
 

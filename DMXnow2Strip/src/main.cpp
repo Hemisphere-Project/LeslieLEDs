@@ -32,6 +32,44 @@ void onDMXFrameReceived(uint8_t universe, const uint8_t* data) {
     }
 }
 
+// Quick RGBW test pattern so hardware faults are obvious during boot
+void playBootRGBWTest() {
+    if (!ledEngine) {
+        return;
+    }
+
+    LedEngineState testState{};
+    testState.masterBrightness = LED_BRIGHTNESS;
+    testState.mode = AnimationMode::ANIM_SOLID;
+    testState.animationSpeed = 0;
+    testState.animationCtrl = 0;
+    testState.strobeRate = 0;
+    testState.blendMode = 0;
+    testState.mirror = MirrorMode::MIRROR_NONE;
+    testState.direction = DirectionMode::DIR_FORWARD;
+
+    const ColorRGBW testColors[4] = {
+        ColorRGBW(255, 0, 0, 0),
+        ColorRGBW(0, 255, 0, 0),
+        ColorRGBW(0, 0, 255, 0),
+        ColorRGBW(0, 0, 0, 255)
+    };
+
+    for (uint8_t i = 0; i < 4; ++i) {
+        testState.colorA = testColors[i];
+        testState.colorB = testColors[i];
+        ledEngine->update(millis(), testState);
+        ledEngine->show();
+        delay(150);
+    }
+
+    // Return strip to black before waiting for DMX
+    testState.colorA = ColorRGBW(0, 0, 0, 0);
+    testState.colorB = testState.colorA;
+    ledEngine->update(millis(), testState);
+    ledEngine->show();
+}
+
 // ========================================
 // Setup
 // ========================================
@@ -61,6 +99,7 @@ void setup() {
     
     ledEngine = new LedEngine(ledConfig);
     ledEngine->begin();
+    playBootRGBWTest();
     
     // Initialize DMX adapter
     dmxAdapter = new DMXToLedEngine();

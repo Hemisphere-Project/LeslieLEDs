@@ -34,6 +34,44 @@ uint8_t dmxFrame[DMX_UNIVERSE_SIZE];
 unsigned long lastDMXSend = 0;
 const uint32_t DMX_SEND_INTERVAL = 33; // ~30Hz DMX refresh rate
 
+// Quick RGBW sweep lets us spot wiring faults before DMX starts
+void playBootRGBWTest() {
+  if (!ledEngine) {
+    return;
+  }
+
+  LedEngineState testState{};
+  testState.masterBrightness = ledConfig.defaultBrightness;
+  testState.mode = AnimationMode::ANIM_SOLID;
+  testState.animationSpeed = 0;
+  testState.animationCtrl = 0;
+  testState.strobeRate = 0;
+  testState.blendMode = 0;
+  testState.mirror = MirrorMode::MIRROR_NONE;
+  testState.direction = DirectionMode::DIR_FORWARD;
+
+  const ColorRGBW testColors[4] = {
+    ColorRGBW(255, 0, 0, 0),
+    ColorRGBW(0, 255, 0, 0),
+    ColorRGBW(0, 0, 255, 0),
+    ColorRGBW(0, 0, 0, 255)
+  };
+
+  for (uint8_t i = 0; i < 4; ++i) {
+    testState.colorA = testColors[i];
+    testState.colorB = testColors[i];
+    ledEngine->update(millis(), testState);
+    ledEngine->show();
+    delay(150);
+  }
+
+  // Return to black before regular rendering resumes
+  testState.colorA = ColorRGBW(0, 0, 0, 0);
+  testState.colorB = testState.colorA;
+  ledEngine->update(millis(), testState);
+  ledEngine->show();
+}
+
 // ========================================
 // Setup
 // ========================================
@@ -66,6 +104,7 @@ void setup() {
   
   ledEngine = new LedEngine(ledConfig);
   ledEngine->begin();
+  playBootRGBWTest();
   displayHandler.setLedEngine(ledEngine);
   displayHandler.setDMXState(&dmxState);
   
@@ -75,9 +114,13 @@ void setup() {
   midiHandler.setDMXState(&dmxState);
   midiHandler.setDisplayHandler(&displayHandler);
   
-  // Initialize ESPNow DMX sender
+  // Initialize MeshClock so it owns the ESP-NOW driver and forwards non-clock packets
+  meshClock.setUserCallback(ESPNowDMX::forwardPacket);
+  meshClock.begin(true);
+
+  // Initialize ESPNow DMX sender (reuse MeshClock's ESP-NOW stack)
   espnowDMX.setUniverseId(DMX_UNIVERSE_ID);
-  if (!espnowDMX.begin(ESPNOW_DMX_MODE_SENDER)) {
+  if (!espnowDMX.begin(ESPNOW_DMX_MODE_SENDER, false)) {
     #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
       Serial.println("[ERR] Failed to initialize ESPNowDMX sender");
     #endif
@@ -85,9 +128,6 @@ void setup() {
       delay(1000);
     }
   }
-  
-  // Initialize MeshClock and register ESP-NOW callback chain
-  meshClock.begin(true);
   
   #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
     Serial.println("Setup complete - Ready for MIDI");

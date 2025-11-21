@@ -6,6 +6,7 @@
 #include <LedEngine.h>
 #include "config.h"
 #include "dmx_state.h"
+#include "led_preview_renderer.h"
 
 class DisplayHandler {
 public:
@@ -51,8 +52,7 @@ private:
     } _lastState;
 
     static constexpr uint8_t PAGE_COUNT = 3;
-    static constexpr uint8_t PREVIEW_PIXEL_SIZE = 4;
-    static constexpr uint8_t PREVIEW_ROW_SPACING = 4;
+    LedPreviewRenderer _previewRenderer;
 
     void drawUI();
     void drawPagePreview();

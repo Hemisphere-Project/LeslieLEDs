@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <USBMIDI.h>
+#include "midi_processor.h"
 
 // Forward declarations
 class DMXState;
@@ -20,22 +21,12 @@ public:
     void setDisplayHandler(DisplayHandler* display);
     
     // Get last received message info for display
-    const char* getLastMessage() const { return _lastMessage; }
-    unsigned long getLastMessageTime() const { return _lastMessageTime; }
+    const char* getLastMessage() const { return _processor.getLastMessage(); }
+    unsigned long getLastMessageTime() const { return _processor.getLastMessageTime(); }
 
 private:
     USBMIDI _midi;
-    DMXState* _dmxState;
-    DisplayHandler* _displayHandler;
-    
-    char _lastMessage[32];
-    unsigned long _lastMessageTime;
-    
-    void handleControlChange(byte channel, byte controller, byte value);
-    void handleNoteOn(byte channel, byte note, byte velocity);
-    void handleNoteOff(byte channel, byte note, byte velocity);
-    
-    void updateLastMessage(const char* msg);
+    MidiProcessor _processor;
 };
 
 #endif // MIDI_HANDLER_H

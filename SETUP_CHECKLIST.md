@@ -84,6 +84,7 @@ Repeat for each receiver device:
 ### 1. Power On Sequence
 - [ ] Power on all receivers first
 - [ ] Power on sender last
+- [ ] Confirm each device plays the fast RGBW boot sweep before entering "Waiting" state
 - [ ] All receivers show "Clock: Slave" status
 
 ### 2. MIDI Connection Test
@@ -111,6 +112,12 @@ Repeat for each receiver device:
 - [ ] Verify DMX reception at 10m
 - [ ] Verify DMX reception at 20m
 - [ ] Note maximum working distance: _____m
+
+### 6. Controller App Sanity Check
+- [ ] From repo root run `./controller/run.sh` on macOS/Linux (or `uv pip install -r requirements.txt` + `python controller.py` manually)
+- [ ] Ensure the virtual MIDI input named "LeslieCTRLs" appears inside the DAW
+- [ ] Verify GUI sliders move when turning DAW knobs and that CC values forward to the selected hardware port
+- [ ] Confirm the app auto-selects a Midi2DMXnow USB or "USB Single Serial" port when available
 
 ## Troubleshooting
 
@@ -157,7 +164,7 @@ Sent 100 DMX frames, Clock: 3456 ms
 ```
 === DMXnow2Strip Starting ===
 Platform: AtomS3
-LED Count: 300
+LED Count: 120
 LED_DATA_PIN: GPIO 2
 Setup complete
 Waiting for DMX over ESP-NOW
@@ -180,7 +187,7 @@ DMX: Connected, Clock: 3456 ms, FPS: 60
 - ESP-NOW has a limit of ~20 paired devices (not applicable in broadcast mode)
 - Broadcast mode has no pairing required, unlimited receivers
 - Clock sync accuracy improves after ~10 seconds of runtime
-- LED strips require adequate power (300 LEDs ≈ 18A @ full white)
+- LED strips require adequate power (120 SK6812 RGBW LEDs ≈ 7A @ full white)
 - Use separate power supply for LED strips, not ESP32 power
 
 ## Performance Targets

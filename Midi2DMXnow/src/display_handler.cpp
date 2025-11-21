@@ -120,72 +120,8 @@ void DisplayHandler::drawUI() {
 void DisplayHandler::drawPagePreview() {
 #if DISPLAY_ENABLED
     if (!_ledEngine) return;
-
-    int16_t w = M5.Display.width();
-    int16_t h = M5.Display.height();
-
-    if (_needsFullRedraw) {
-        M5.Display.fillScreen(COLOR_BG);
-        M5.Display.setTextColor(COLOR_TITLE, COLOR_BG);
-        M5.Display.setTextSize(1);
-        M5.Display.setCursor(2, 2);
-        M5.Display.print("LED Preview");
-        _needsFullRedraw = false;
-    }
-
-    const CRGB* leds = _ledEngine->getPreviewPixels();
-    if (!leds) return;
-
-    uint16_t ledCount = _ledEngine->getLedCount();
-    const int pixelSize = PREVIEW_PIXEL_SIZE;
-    const int rowSpacing = PREVIEW_ROW_SPACING;
-    const int startY = 14;
-    const int availableHeight = h - startY - 2;
-    const int ledsPerRow = w / pixelSize;
-    const int rowHeight = pixelSize + rowSpacing;
-    const int maxRows = availableHeight / rowHeight;
-    const int maxLedsToShow = ledsPerRow * maxRows;
-
-    int ledIndex = 0;
-    int row = 0;
-
-    while (ledIndex < ledCount && ledIndex < maxLedsToShow && row < maxRows) {
-        bool reverseRow = (row % 2 == 1);
-        int colCount = 0;
-
-        for (int col = 0; col < ledsPerRow && ledIndex < ledCount; col++) {
-            int displayCol = reverseRow ? (ledsPerRow - 1 - col) : col;
-            int x = displayCol * pixelSize;
-            int y = startY + (row * rowHeight);
-
-            const CRGB& color = leds[ledIndex];
-            uint16_t color565 = M5.Display.color565(color.r, color.g, color.b);
-            M5.Display.fillRect(x, y, pixelSize, pixelSize, color565);
-
-            ledIndex++;
-            colCount++;
-        }
-
-        if (row < maxRows - 1 && ledIndex < ledCount) {
-            int connectorX = reverseRow ? 0 : (colCount - 1) * pixelSize;
-            int connectorY = startY + (row * rowHeight) + pixelSize;
-            const CRGB& connectorColor = leds[ledIndex - 1];
-            uint16_t connectorColor565 = M5.Display.color565(connectorColor.r, connectorColor.g, connectorColor.b);
-            M5.Display.fillRect(connectorX, connectorY, pixelSize, rowSpacing, connectorColor565);
-        }
-
-        row++;
-    }
-
-    static uint8_t lastDisplayedFPS = 0;
-    uint8_t currentFPS = _ledEngine->getFPS();
-    if (currentFPS != lastDisplayedFPS) {
-        M5.Display.fillRect(0, h - 12, w, 12, COLOR_BG);
-        M5.Display.setTextColor(COLOR_TEXT, COLOR_BG);
-        M5.Display.setCursor(2, h - 10);
-        M5.Display.printf("%d LEDs | %dFPS", ledCount, currentFPS);
-        lastDisplayedFPS = currentFPS;
-    }
+    _previewRenderer.draw(M5.Display, _ledEngine, _needsFullRedraw);
+    _needsFullRedraw = false;
 #endif
 }
 

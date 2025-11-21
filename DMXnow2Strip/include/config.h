@@ -20,7 +20,7 @@
 // LED Strip Configuration
 // ========================================
 #ifndef LED_COUNT
-    #define LED_COUNT 300
+    #define LED_COUNT 120
 #endif
 #define LED_TYPE SK6812
 #define LED_COLOR_ORDER GRB
