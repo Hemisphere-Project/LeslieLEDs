@@ -1,25 +1,21 @@
 #pragma once
 
 #include <Arduino.h>
-#include <FastLED.h>
 
-#ifndef LEDENGINE_CHIPSET
-#define LEDENGINE_CHIPSET SK6812
-#endif
-
-#ifndef LEDENGINE_COLOR_ORDER
-#define LEDENGINE_COLOR_ORDER GRB
-#endif
-
-#ifndef LEDENGINE_DATA_PIN
-#ifdef LED_DATA_PIN
-#define LEDENGINE_DATA_PIN LED_DATA_PIN
+#if defined(ARDUINO_ARCH_ESP32)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #else
-#define LEDENGINE_DATA_PIN 2
+using TaskHandle_t = void*;
+using SemaphoreHandle_t = void*;
 #endif
-#endif
+
+#include "libstrip.h"
 
 namespace LedEngineLib {
+
+struct CRGB;
 
 struct ColorRGBW {
     uint8_t r;
@@ -32,14 +28,18 @@ struct ColorRGBW {
         : r(red), g(green), b(blue), w(white) {}
 
     void fromHSV(uint8_t hue, uint8_t sat, uint8_t val, uint8_t white = 0);
-    CRGB toCRGB() const { return CRGB(r, g, b); }
+    CRGB toCRGB() const;
 };
 
-struct CRGBW {
-    uint8_t g;
+using CRGBW = ::CRGBW;
+
+struct CRGB {
     uint8_t r;
+    uint8_t g;
     uint8_t b;
-    uint8_t w;
+
+    CRGB() : r(0), g(0), b(0) {}
+    CRGB(uint8_t red, uint8_t green, uint8_t blue) : r(red), g(green), b(blue) {}
 };
 
 enum AnimationMode {
@@ -84,6 +84,8 @@ struct LedEngineConfig {
     uint8_t targetFPS = 60;
     uint8_t defaultBrightness = 128;
     bool enableRGBW = true;
+    uint8_t rmtChannel = 0;
+    int ledTypeOverride = -1; // Use values from led_types or -1 for auto
 };
 
 struct LedEngineState {
@@ -116,8 +118,11 @@ public:
 private:
     LedEngineConfig _config;
     LedEngineState _state;
+    LedEngineState _lastRenderedState;
 
-    CRGBW* _leds;
+    CRGBW* _renderBuffer;
+    CRGBW* _hwBuffer;
+    strand_t* _strand;
     mutable CRGB* _previewBuffer;
     bool _initialized;
     uint32_t _animationPhase;
@@ -126,6 +131,17 @@ private:
     uint32_t _frameCount;
     uint32_t _fpsTimer;
     uint8_t _fps;
+    TaskHandle_t _renderTaskHandle;
+    SemaphoreHandle_t _stateMutex;
+    SemaphoreHandle_t _bufferMutex;
+    LedEngineState _pendingState;
+    bool _stateDirty;
+    uint32_t _pendingClockMillis;
+
+    static void renderTaskTrampoline(void* param);
+    void renderTaskLoop();
+    void serviceRenderTick();
+    void presentFrame();
 
     void renderFrame(uint32_t clockMillis);
     void renderSolid();
@@ -144,6 +160,8 @@ private:
     void applyStrobeOverlay(uint32_t clockMillis);
     void calculateFPS();
     WaveformType currentWaveform() const;
+
+    bool statesEqual(const LedEngineState& a, const LedEngineState& b) const;
 };
 
 } // namespace LedEngineLib

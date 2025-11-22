@@ -8,12 +8,7 @@
       "name": "Hemisphere-Project"
     }
   ],
-  "dependencies": [
-    {
-      "name": "FastLED",
-      "version": "^3.10.3"
-    }
-  ],
+  "dependencies": [],
   "frameworks": "arduino",
   "platforms": "espressif32"
 }

@@ -1,29 +1,140 @@
 #include "LedEngine.h"
 
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+
+#if defined(ARDUINO_ARCH_ESP32)
+#include <esp_random.h>
+#endif
+
 namespace LedEngineLib {
 
 namespace {
+
+constexpr float LEDENGINE_TWO_PI = 6.28318530718f;
+
+bool g_rmtInitialized = false;
+
+uint32_t nextRandom32() {
+#if defined(ARDUINO_ARCH_ESP32)
+    return esp_random();
+#else
+    return (static_cast<uint32_t>(rand()) << 16) ^ static_cast<uint32_t>(rand());
+#endif
+}
+
+uint8_t sin8(uint8_t theta) {
+    float angle = (static_cast<float>(theta) / 255.0f) * LEDENGINE_TWO_PI;
+    float s = sinf(angle);
+    int value = static_cast<int>((s + 1.0f) * 127.5f + 0.5f);
+    if (value < 0) value = 0;
+    if (value > 255) value = 255;
+    return static_cast<uint8_t>(value);
+}
+
+uint8_t beatsin8(uint8_t bpm, uint8_t low, uint8_t high, uint32_t timeMs) {
+    if (bpm == 0 || high <= low) {
+        return low;
+    }
+    uint64_t scaledTime = static_cast<uint64_t>(timeMs) * bpm;
+    uint32_t beat = (scaledTime * 256ULL) / 60000ULL;
+    uint8_t angle = static_cast<uint8_t>(beat & 0xFF);
+    uint8_t sine = sin8(angle);
+    uint8_t range = high - low;
+    uint8_t scaled = scale8(sine, range);
+    return low + scaled;
+}
+
+uint16_t random16(uint16_t maxValue) {
+    if (maxValue == 0) {
+        return 0;
+    }
+    return static_cast<uint16_t>(nextRandom32() % maxValue);
+}
+
+uint8_t random8() {
+    return static_cast<uint8_t>(nextRandom32() & 0xFF);
+}
+
+uint8_t random8(uint8_t maxExclusive) {
+    if (maxExclusive == 0) {
+        return 0;
+    }
+    return static_cast<uint8_t>(nextRandom32() % maxExclusive);
+}
+
+void hsvToRgb(uint8_t hue, uint8_t sat, uint8_t val, uint8_t& r, uint8_t& g, uint8_t& b) {
+    if (sat == 0) {
+        r = g = b = val;
+        return;
+    }
+
+    uint8_t region = hue / 43;
+    uint8_t remainder = (hue - (region * 43)) * 6;
+
+    uint16_t p = (static_cast<uint16_t>(val) * (255 - sat)) >> 8;
+    uint16_t q = (static_cast<uint16_t>(val) * (255 - ((static_cast<uint16_t>(sat) * remainder) >> 8))) >> 8;
+    uint16_t t = (static_cast<uint16_t>(val) * (255 - ((static_cast<uint16_t>(sat) * (255 - remainder)) >> 8))) >> 8;
+
+    switch (region) {
+        case 0:
+            r = val;
+            g = static_cast<uint8_t>(t);
+            b = static_cast<uint8_t>(p);
+            break;
+        case 1:
+            r = static_cast<uint8_t>(q);
+            g = val;
+            b = static_cast<uint8_t>(p);
+            break;
+        case 2:
+            r = static_cast<uint8_t>(p);
+            g = val;
+            b = static_cast<uint8_t>(t);
+            break;
+        case 3:
+            r = static_cast<uint8_t>(p);
+            g = static_cast<uint8_t>(q);
+            b = val;
+            break;
+        case 4:
+            r = static_cast<uint8_t>(t);
+            g = static_cast<uint8_t>(p);
+            b = val;
+            break;
+        default:
+            r = val;
+            g = static_cast<uint8_t>(p);
+            b = static_cast<uint8_t>(q);
+            break;
+    }
+}
+
 uint8_t clampByte(int value) {
     if (value < 0) return 0;
     if (value > 255) return 255;
     return static_cast<uint8_t>(value);
 }
-}
+
+} // namespace
 
 void ColorRGBW::fromHSV(uint8_t hue, uint8_t sat, uint8_t val, uint8_t white) {
-    CHSV hsv(hue, sat, val);
-    CRGB rgb;
-    hsv2rgb_rainbow(hsv, rgb);
-    r = rgb.r;
-    g = rgb.g;
-    b = rgb.b;
+    hsvToRgb(hue, sat, val, r, g, b);
     w = white;
+}
+
+CRGB ColorRGBW::toCRGB() const {
+    return CRGB(r, g, b);
 }
 
 LedEngine::LedEngine(const LedEngineConfig& config)
     : _config(config),
       _state(),
-      _leds(nullptr),
+             _lastRenderedState(),
+      _renderBuffer(nullptr),
+      _hwBuffer(nullptr),
+    _strand(nullptr),
       _previewBuffer(nullptr),
       _initialized(false),
       _animationPhase(0),
@@ -31,15 +142,42 @@ LedEngine::LedEngine(const LedEngineConfig& config)
       _frameIntervalMs(config.targetFPS == 0 ? 16 : 1000 / config.targetFPS),
       _frameCount(0),
       _fpsTimer(0),
-      _fps(0) {
+      _fps(0),
+      _renderTaskHandle(nullptr),
+      _stateMutex(nullptr),
+      _bufferMutex(nullptr),
+      _stateDirty(false),
+      _pendingClockMillis(0) {
     _state.masterBrightness = _config.defaultBrightness;
     _state.colorA = ColorRGBW(0, 0, 0, 0);
     _state.colorB = ColorRGBW(0, 0, 0, 0);
+    _pendingState = _state;
 }
 
 LedEngine::~LedEngine() {
-    delete[] _leds;
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_renderTaskHandle) {
+        vTaskDelete(_renderTaskHandle);
+        _renderTaskHandle = nullptr;
+    }
+    if (_stateMutex) {
+        vSemaphoreDelete(_stateMutex);
+        _stateMutex = nullptr;
+    }
+    if (_bufferMutex) {
+        vSemaphoreDelete(_bufferMutex);
+        _bufferMutex = nullptr;
+    }
+#endif
+    delete[] _renderBuffer;
+    _renderBuffer = nullptr;
+    _hwBuffer = nullptr;
     delete[] _previewBuffer;
+    _previewBuffer = nullptr;
+    if (_strand) {
+        LibStrip::resetStrand(_strand);
+        _strand = nullptr;
+    }
 }
 
 bool LedEngine::begin() {
@@ -51,15 +189,73 @@ bool LedEngine::begin() {
         return false;
     }
 
-    _leds = new CRGBW[_config.ledCount];
-    _previewBuffer = new CRGB[_config.ledCount];
+    if (!_previewBuffer) {
+        _previewBuffer = new CRGB[_config.ledCount];
+    }
+
+    if (!g_rmtInitialized) {
+        if (LibStrip::init() != 0) {
+            return false;
+        }
+        g_rmtInitialized = true;
+    }
+
+    led_types ledType = _config.enableRGBW ? LED_SK6812W_V4 : LED_SK6812_V1;
+    if (_config.ledTypeOverride >= 0) {
+        ledType = static_cast<led_types>(_config.ledTypeOverride);
+    }
+
+    strand_t strand = {};
+    strand.rmtChannel = _config.rmtChannel;
+    strand.gpioNum = _config.dataPin;
+    strand.ledType = ledType;
+    strand.brightLimit = 255;
+    strand.numPixels = _config.ledCount;
+    strand.pixels = nullptr;
+    strand._stateVars = nullptr;
+
+    _strand = LibStrip::addStrand(strand);
+    if (!_strand) {
+        return false;
+    }
+
+    _hwBuffer = reinterpret_cast<CRGBW*>(_strand->pixels);
+    if (!_renderBuffer) {
+        _renderBuffer = new CRGBW[_config.ledCount];
+    }
     clearLEDs();
 
-    const uint16_t rgbSlots = _config.enableRGBW ? (_config.ledCount * 4 / 3) : _config.ledCount;
-    FastLED.addLeds<LEDENGINE_CHIPSET, LEDENGINE_DATA_PIN, LEDENGINE_COLOR_ORDER>(reinterpret_cast<CRGB*>(_leds), rgbSlots);
-    FastLED.setBrightness(_state.masterBrightness);
-    FastLED.clear();
-    FastLED.show();
+#if defined(ARDUINO_ARCH_ESP32)
+    if (!_stateMutex) {
+        _stateMutex = xSemaphoreCreateMutex();
+    }
+    if (!_bufferMutex) {
+        _bufferMutex = xSemaphoreCreateMutex();
+    }
+#endif
+
+    if (_hwBuffer && _renderBuffer) {
+        memcpy(_hwBuffer, _renderBuffer, sizeof(CRGBW) * _config.ledCount);
+        LibStrip::updatePixels(_strand);
+    }
+
+#if defined(ARDUINO_ARCH_ESP32)
+    if (!_renderTaskHandle) {
+        constexpr UBaseType_t kRenderPriority = configMAX_PRIORITIES - 2;
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            LedEngine::renderTaskTrampoline,
+            "LEDRender",
+            4096,
+            this,
+            kRenderPriority,
+            &_renderTaskHandle,
+            1);
+        if (created != pdPASS) {
+            _renderTaskHandle = nullptr;
+            return false;
+        }
+    }
+#endif
 
     _initialized = true;
     _lastUpdateClock = 0;
@@ -74,24 +270,113 @@ void LedEngine::update(uint32_t clockMillis, const LedEngineState& state) {
         return;
     }
 
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_stateMutex && xSemaphoreTake(_stateMutex, portMAX_DELAY) == pdTRUE) {
+        _pendingState = state;
+        _pendingClockMillis = clockMillis;
+        _stateDirty = true;
+        xSemaphoreGive(_stateMutex);
+    }
+#else
     _state = state;
-    FastLED.setBrightness(_state.masterBrightness);
+    _pendingState = state;
+    _stateDirty = true;
+    _pendingClockMillis = clockMillis;
+    serviceRenderTick();
+#endif
+}
+
+void LedEngine::renderTaskTrampoline(void* param) {
+#if defined(ARDUINO_ARCH_ESP32)
+    static_cast<LedEngine*>(param)->renderTaskLoop();
+#endif
+}
+
+void LedEngine::renderTaskLoop() {
+#if defined(ARDUINO_ARCH_ESP32)
+    const TickType_t frameDelay = pdMS_TO_TICKS(50); // ~20 FPS
+    while (true) {
+        TickType_t startTick = xTaskGetTickCount();
+        serviceRenderTick();
+        TickType_t elapsed = xTaskGetTickCount() - startTick;
+        if (elapsed < frameDelay) {
+            vTaskDelay(frameDelay - elapsed);
+        }
+    }
+#endif
+}
+
+void LedEngine::serviceRenderTick() {
+    if (!_initialized || !_strand || !_renderBuffer) {
+        return;
+    }
+
+    uint32_t clockMillis = millis();
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_stateMutex && xSemaphoreTake(_stateMutex, portMAX_DELAY) == pdTRUE) {
+        if (_stateDirty) {
+            _state = _pendingState;
+            _stateDirty = false;
+        }
+        if (_pendingClockMillis != 0) {
+            clockMillis = _pendingClockMillis;
+            _pendingClockMillis = 0;
+        }
+        xSemaphoreGive(_stateMutex);
+    }
+#else
+    if (_stateDirty) {
+        _state = _pendingState;
+        _stateDirty = false;
+        clockMillis = _pendingClockMillis;
+        _pendingClockMillis = 0;
+    }
+#endif
 
     if (_frameIntervalMs == 0) {
         _frameIntervalMs = 16;
     }
 
     uint32_t elapsed = (_lastUpdateClock == 0) ? _frameIntervalMs : (clockMillis - _lastUpdateClock);
-    if (_lastUpdateClock != 0 && elapsed < _frameIntervalMs) {
-        return;
-    }
     if (elapsed == 0) {
         elapsed = 1;
     }
 
     _animationPhase += static_cast<uint32_t>(_state.animationSpeed) * elapsed;
     _lastUpdateClock = clockMillis;
+
+    if (_strand) {
+        _strand->brightLimit = _state.masterBrightness;
+    }
+
     renderFrame(clockMillis);
+    _lastRenderedState = _state;
+    presentFrame();
+}
+
+void LedEngine::presentFrame() {
+    if (!_strand || !_renderBuffer || !_hwBuffer) {
+        return;
+    }
+
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_bufferMutex) {
+        if (xSemaphoreTake(_bufferMutex, portMAX_DELAY) != pdTRUE) {
+            return;
+        }
+    }
+#endif
+
+    memcpy(_hwBuffer, _renderBuffer, sizeof(CRGBW) * _config.ledCount);
+    LibStrip::updatePixels(_strand);
+
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_bufferMutex) {
+        xSemaphoreGive(_bufferMutex);
+    }
+#endif
+
+    calculateFPS();
 }
 
 void LedEngine::renderFrame(uint32_t clockMillis) {
@@ -130,23 +415,37 @@ void LedEngine::renderFrame(uint32_t clockMillis) {
 }
 
 void LedEngine::show() {
-    if (!_initialized) {
+    if (!_initialized || !_strand) {
         return;
     }
-    FastLED.show();
-    calculateFPS();
+    presentFrame();
 }
 
 const CRGB* LedEngine::getPreviewPixels() const {
-    if (!_initialized || !_previewBuffer) {
+    if (!_initialized || !_previewBuffer || !_hwBuffer) {
         return nullptr;
     }
 
-    for (uint16_t i = 0; i < _config.ledCount; ++i) {
-        _previewBuffer[i].r = _leds[i].r;
-        _previewBuffer[i].g = _leds[i].g;
-        _previewBuffer[i].b = _leds[i].b;
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_bufferMutex) {
+        if (xSemaphoreTake(_bufferMutex, portMAX_DELAY) != pdTRUE) {
+            return nullptr;
+        }
     }
+#endif
+
+    for (uint16_t i = 0; i < _config.ledCount; ++i) {
+        _previewBuffer[i].r = _hwBuffer[i].r;
+        _previewBuffer[i].g = _hwBuffer[i].g;
+        _previewBuffer[i].b = _hwBuffer[i].b;
+    }
+
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_bufferMutex) {
+        xSemaphoreGive(_bufferMutex);
+    }
+#endif
+
     return _previewBuffer;
 }
 
@@ -356,18 +655,25 @@ void LedEngine::setPixelRGBW(uint16_t index, const ColorRGBW& color) {
     if (index >= _config.ledCount) {
         return;
     }
-    _leds[index].g = color.g;
-    _leds[index].r = color.r;
-    _leds[index].b = color.b;
-    _leds[index].w = color.w;
+    if (!_renderBuffer) {
+        return;
+    }
+
+    // Store raw color values without brightness scaling.
+    // Brightness is applied atomically at hardware level via strand->brightLimit
+    // in LibStrip::updatePixels() to prevent glitches during MIDI adjustments.
+    _renderBuffer[index].r = color.r;
+    _renderBuffer[index].g = color.g;
+    _renderBuffer[index].b = color.b;
+    _renderBuffer[index].w = color.w;
 }
 
 void LedEngine::clearLEDs() {
-    if (!_leds) {
+    if (!_renderBuffer) {
         return;
     }
     for (uint16_t i = 0; i < _config.ledCount; ++i) {
-        _leds[i] = {0, 0, 0, 0};
+        _renderBuffer[i] = {0, 0, 0, 0};
     }
 }
 
@@ -375,20 +681,26 @@ void LedEngine::fadePixel(uint16_t index, uint8_t amount) {
     if (index >= _config.ledCount) {
         return;
     }
-    _leds[index].r = scale8(_leds[index].r, 255 - amount);
-    _leds[index].g = scale8(_leds[index].g, 255 - amount);
-    _leds[index].b = scale8(_leds[index].b, 255 - amount);
-    _leds[index].w = scale8(_leds[index].w, 255 - amount);
+    if (!_renderBuffer) {
+        return;
+    }
+    _renderBuffer[index].r = scale8(_renderBuffer[index].r, 255 - amount);
+    _renderBuffer[index].g = scale8(_renderBuffer[index].g, 255 - amount);
+    _renderBuffer[index].b = scale8(_renderBuffer[index].b, 255 - amount);
+    _renderBuffer[index].w = scale8(_renderBuffer[index].w, 255 - amount);
 }
 
 void LedEngine::applyMirror() {
+    if (!_renderBuffer) {
+        return;
+    }
     switch (_state.mirror) {
         case MIRROR_NONE:
             return;
         case MIRROR_FULL: {
             uint16_t half = _config.ledCount / 2;
             for (uint16_t i = 0; i < half; ++i) {
-                _leds[_config.ledCount - 1 - i] = _leds[i];
+                _renderBuffer[_config.ledCount - 1 - i] = _renderBuffer[i];
             }
             break;
         }
@@ -401,9 +713,9 @@ void LedEngine::applyMirror() {
                 uint16_t start = seg * quarter;
                 if (seg % 2 == 1) {
                     for (uint16_t i = 0; i < quarter / 2; ++i) {
-                        CRGBW temp = _leds[start + i];
-                        _leds[start + i] = _leds[start + quarter - 1 - i];
-                        _leds[start + quarter - 1 - i] = temp;
+                        CRGBW temp = _renderBuffer[start + i];
+                        _renderBuffer[start + i] = _renderBuffer[start + quarter - 1 - i];
+                        _renderBuffer[start + quarter - 1 - i] = temp;
                     }
                 }
             }
@@ -418,9 +730,9 @@ void LedEngine::applyMirror() {
                 uint16_t start = seg * sixth;
                 if (seg % 2 == 1) {
                     for (uint16_t i = 0; i < sixth / 2; ++i) {
-                        CRGBW temp = _leds[start + i];
-                        _leds[start + i] = _leds[start + sixth - 1 - i];
-                        _leds[start + sixth - 1 - i] = temp;
+                        CRGBW temp = _renderBuffer[start + i];
+                        _renderBuffer[start + i] = _renderBuffer[start + sixth - 1 - i];
+                        _renderBuffer[start + sixth - 1 - i] = temp;
                     }
                 }
             }
@@ -435,9 +747,9 @@ void LedEngine::applyMirror() {
                 uint16_t start = seg * eighth;
                 if (seg % 2 == 1) {
                     for (uint16_t i = 0; i < eighth / 2; ++i) {
-                        CRGBW temp = _leds[start + i];
-                        _leds[start + i] = _leds[start + eighth - 1 - i];
-                        _leds[start + eighth - 1 - i] = temp;
+                        CRGBW temp = _renderBuffer[start + i];
+                        _renderBuffer[start + i] = _renderBuffer[start + eighth - 1 - i];
+                        _renderBuffer[start + eighth - 1 - i] = temp;
                     }
                 }
             }
@@ -448,6 +760,9 @@ void LedEngine::applyMirror() {
 
 void LedEngine::applyStrobeOverlay(uint32_t clockMillis) {
     if (_state.strobeRate == 0) {
+        return;
+    }
+    if (!_renderBuffer) {
         return;
     }
 
@@ -467,10 +782,10 @@ void LedEngine::applyStrobeOverlay(uint32_t clockMillis) {
     }
 
     for (uint16_t i = 0; i < _config.ledCount; ++i) {
-        _leds[i].r = scale8(_leds[i].r, dimFactor);
-        _leds[i].g = scale8(_leds[i].g, dimFactor);
-        _leds[i].b = scale8(_leds[i].b, dimFactor);
-        _leds[i].w = scale8(_leds[i].w, dimFactor);
+        _renderBuffer[i].r = scale8(_renderBuffer[i].r, dimFactor);
+        _renderBuffer[i].g = scale8(_renderBuffer[i].g, dimFactor);
+        _renderBuffer[i].b = scale8(_renderBuffer[i].b, dimFactor);
+        _renderBuffer[i].w = scale8(_renderBuffer[i].w, dimFactor);
     }
 }
 
@@ -482,6 +797,25 @@ void LedEngine::calculateFPS() {
         _frameCount = 0;
         _fpsTimer = now;
     }
+}
+
+bool LedEngine::statesEqual(const LedEngineState& a, const LedEngineState& b) const {
+    if (a.masterBrightness != b.masterBrightness) return false;
+    if (a.mode != b.mode) return false;
+    if (a.animationSpeed != b.animationSpeed) return false;
+    if (a.animationCtrl != b.animationCtrl) return false;
+    if (a.strobeRate != b.strobeRate) return false;
+    if (a.blendMode != b.blendMode) return false;
+    if (a.mirror != b.mirror) return false;
+    if (a.direction != b.direction) return false;
+
+    auto colorsEqual = [](const ColorRGBW& lhs, const ColorRGBW& rhs) {
+        return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b && lhs.w == rhs.w;
+    };
+
+    if (!colorsEqual(a.colorA, b.colorA)) return false;
+    if (!colorsEqual(a.colorB, b.colorB)) return false;
+    return true;
 }
 
 } // namespace LedEngineLib

@@ -84,6 +84,9 @@ class LeslieLEDsController:
         self.virtual_port_thread = None
         self.running = False
         self.is_serial_mode = False
+        self._cc_last_time: dict[int, float] = {}
+        self._cc_last_value: dict[int, int] = {}
+        self._cc_min_interval = 0.004  # seconds between CC transmissions per control
         
     def setup_midi(self):
         """Initialize MIDI output and virtual input"""
@@ -196,6 +199,20 @@ class LeslieLEDsController:
     def send_cc(self, cc_number: int, value: int):
         """Send MIDI CC message"""
         value = max(0, min(127, int(value)))
+        
+        now = time.monotonic()
+        last_time = self._cc_last_time.get(cc_number, -1.0)
+        last_value = self._cc_last_value.get(cc_number)
+        
+        if last_value == value and now - last_time < self._cc_min_interval:
+            return
+        
+        if last_value is not None and now - last_time < self._cc_min_interval:
+            if abs(value - last_value) <= 1:
+                return
+        
+        self._cc_last_time[cc_number] = now
+        self._cc_last_value[cc_number] = value
         message = [0xB0 + MIDI_CHANNEL, cc_number, value]
         
         if self.is_serial_mode and self.serial_port:
