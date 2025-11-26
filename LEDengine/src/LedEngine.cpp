@@ -118,6 +118,22 @@ uint8_t clampByte(int value) {
     return static_cast<uint8_t>(value);
 }
 
+uint16_t pingPongIndex(uint32_t value, uint16_t limit) {
+    if (limit <= 1) {
+        return 0;
+    }
+    uint32_t span = static_cast<uint32_t>(limit - 1);
+    uint32_t period = span * 2;
+    if (period == 0) {
+        return 0;
+    }
+    uint32_t phase = value % period;
+    if (phase <= span) {
+        return static_cast<uint16_t>(phase);
+    }
+    return static_cast<uint16_t>(period - phase);
+}
+
 } // namespace
 
 void ColorRGBW::fromHSV(uint8_t hue, uint8_t sat, uint8_t val, uint8_t white) {
@@ -528,16 +544,15 @@ void LedEngine::renderChase() {
     if (segmentSize == 0) {
         segmentSize = 1;
     }
-    uint16_t pos = ((_animationPhase >> 8) % _config.ledCount);
+    uint32_t travel = (_animationPhase >> 8);
+    uint16_t pos = (travel % _config.ledCount);
 
     switch (_state.direction) {
         case DIR_BACKWARD:
             pos = _config.ledCount - 1 - pos;
             break;
         case DIR_PINGPONG:
-            if (((_animationPhase >> 8) / _config.ledCount) % 2 == 1) {
-                pos = 0;
-            }
+            pos = pingPongIndex(travel, _config.ledCount);
             break;
         case DIR_RANDOM:
             pos = random16(_config.ledCount);
@@ -565,19 +580,22 @@ void LedEngine::renderDash() {
     if (segmentSize == 0) {
         segmentSize = 1;
     }
-    uint16_t offset = ((_animationPhase >> 8) % (segmentSize * 2));
+    uint16_t span = segmentSize * 2;
+    if (span == 0) {
+        span = 1;
+    }
+    uint32_t travel = (_animationPhase >> 8);
+    uint16_t offset = travel % span;
 
     switch (_state.direction) {
         case DIR_BACKWARD:
-            offset = (segmentSize * 2) - offset;
+            offset = (span == 0) ? 0 : (span - offset);
             break;
         case DIR_PINGPONG:
-            if (((_animationPhase >> 8) / (segmentSize * 2)) % 2 == 1) {
-                offset = 0;
-            }
+            offset = pingPongIndex(travel, span);
             break;
         case DIR_RANDOM:
-            offset = random16(segmentSize * 2);
+            offset = random16(span);
             break;
         case DIR_FORWARD:
         default:
@@ -661,8 +679,9 @@ void LedEngine::renderRainbow() {
                 hue = 255 - hue;
                 break;
             case DIR_PINGPONG:
-                if (((_animationPhase >> 16) % 2) == 1) {
-                    hue = offset;
+                if (((_animationPhase >> 16) & 0x1) == 1 && _config.ledCount > 0) {
+                    uint16_t mirrored = (_config.ledCount - 1) - i;
+                    hue = offset + (mirrored * 255 / _config.ledCount);
                 }
                 break;
             case DIR_RANDOM:

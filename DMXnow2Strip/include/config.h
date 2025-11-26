@@ -24,7 +24,7 @@
 #endif
 #define LED_TYPE SK6812
 #define LED_COLOR_ORDER GRB
-#define LED_BRIGHTNESS 128
+#define LED_BRIGHTNESS 10
 #define LED_TARGET_FPS 60
 #define LED_RMT_CHANNEL 0
 

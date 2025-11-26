@@ -103,7 +103,7 @@ void setup() {
   ledConfig.ledCount = LED_COUNT;
   ledConfig.dataPin = LED_DATA_PIN;
   ledConfig.targetFPS = 60;
-  ledConfig.defaultBrightness = 128;
+  ledConfig.defaultBrightness = 10;
   ledConfig.enableRGBW = true;
   
   ledEngine = new LedEngine(ledConfig);
