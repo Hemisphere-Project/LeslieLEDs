@@ -22,6 +22,20 @@ bool dmxConnected = false;
 unsigned long lastDMXFrame = 0;
 const uint32_t DMX_TIMEOUT = 3000;
 
+// Diagnostic: log all incoming ESP-NOW packets
+void onRawESPNowPacket(const uint8_t* mac, const uint8_t* data, int len) {
+    #if DEBUG_MODE
+        static unsigned long lastLog = 0;
+        unsigned long now = millis();
+        if (now - lastLog >= 1000) {
+            lastLog = now;
+            Serial.printf("[RawESPNow] len=%d type=0x%02X\n", len, len > 0 ? data[0] : 0);
+        }
+    #endif
+    // Forward to ESPNowDMX
+    ESPNowDMX::forwardPacket(mac, data, len);
+}
+
 // Callback for DMX frame reception
 void onDMXFrameReceived(uint8_t universe, const uint8_t* data) {
     (void)universe;
@@ -104,8 +118,8 @@ void setup() {
     // Initialize DMX adapter
     dmxAdapter = new DMXToLedEngine();
     
-    // Initialize MeshClock (owns ESP-NOW driver) and forward non-clock packets to the DMX receiver
-    meshClock.setUserCallback(ESPNowDMX::forwardPacket);
+    // Initialize MeshClock (owns ESP-NOW driver) and forward non-clock packets via diagnostic wrapper
+    meshClock.setUserCallback(onRawESPNowPacket);
     meshClock.begin(true);
 
     // Initialize ESPNow DMX receiver (reuse MeshClock's ESP-NOW instance)

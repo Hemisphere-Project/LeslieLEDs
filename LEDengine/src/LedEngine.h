@@ -15,8 +15,6 @@ using SemaphoreHandle_t = void*;
 
 namespace LedEngineLib {
 
-struct CRGB;
-
 struct ColorRGBW {
     uint8_t r;
     uint8_t g;
@@ -28,7 +26,6 @@ struct ColorRGBW {
         : r(red), g(green), b(blue), w(white) {}
 
     void fromHSV(uint8_t hue, uint8_t sat, uint8_t val, uint8_t white = 0);
-    CRGB toCRGB() const;
 };
 
 using CRGBW = ::CRGBW;
@@ -118,7 +115,6 @@ public:
 private:
     LedEngineConfig _config;
     LedEngineState _state;
-    LedEngineState _lastRenderedState;
 
     CRGBW* _renderBuffer;
     CRGBW* _hwBuffer;
@@ -160,8 +156,6 @@ private:
     void applyStrobeOverlay(uint32_t clockMillis);
     void calculateFPS();
     WaveformType currentWaveform() const;
-
-    bool statesEqual(const LedEngineState& a, const LedEngineState& b) const;
 };
 
 } // namespace LedEngineLib

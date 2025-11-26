@@ -99,9 +99,11 @@ void DMXState::handleGlobalCC(byte controller, byte value) {
         case CC_ANIMATION_MODE:
             // Map 0-127 to animation modes
             {
-                uint8_t mode = value / (128 / LedEngineLib::ANIM_MODE_COUNT);
-                if (mode >= LedEngineLib::ANIM_MODE_COUNT) {
-                    mode = LedEngineLib::ANIM_MODE_COUNT - 1;
+                constexpr uint8_t modeCount = LedEngineLib::ANIM_MODE_COUNT;
+                uint16_t scaled = static_cast<uint16_t>(value) * modeCount + 64; // add half divisor for rounding
+                uint8_t mode = scaled / 128;
+                if (mode >= modeCount) {
+                    mode = modeCount - 1;
                 }
                 _currentMode = static_cast<AnimationMode>(mode);
             }

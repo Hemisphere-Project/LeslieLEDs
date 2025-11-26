@@ -159,7 +159,6 @@ struct ColorRGBW {
     uint8_t r, g, b, w;
     
     void fromHSV(uint8_t hue, uint8_t sat, uint8_t val, uint8_t white = 0);
-    CRGB toCRGB() const;
 };
 ```
 

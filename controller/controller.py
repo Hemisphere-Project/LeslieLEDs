@@ -42,19 +42,19 @@ CC_SCENE_SAVE_MODE = 127
 NOTE_SCENE_1 = 36
 NOTE_BLACKOUT = 48
 
-# Animation mode names
+# Animation modes exposed in the UI (firmware still supports 10 total modes)
+ANIM_MODE_COUNT_FIRMWARE = 10
 ANIMATION_MODES = [
-    "Solid",
-    "Dual Solid",
-    "Chase",
-    "Dash",
-    "Waveform",
-    "Pulse",
-    "Rainbow",
-    "Sparkle",
-    "Custom 1",
-    "Custom 2"
+    ("Solid", 0),
+    ("Dual Solid", 1),
+    ("Chase", 2),
+    ("Dash", 3),
+    ("Waveform", 4),
+    ("Rainbow", 6),
+    ("Sparkle", 7),
 ]
+
+ANIMATION_MODE_OPTIONS = [label for label, _ in ANIMATION_MODES]
 
 # Mirror modes
 MIRROR_MODES = [
@@ -67,10 +67,10 @@ MIRROR_MODES = [
 
 # Direction modes
 DIRECTION_MODES = [
-    ("Forward", 12),
-    ("Backward", 38),
-    ("Ping Pong", 63),
-    ("Random", 88)
+    ("Forward", 16),
+    ("Backward", 48),
+    ("Ping Pong", 80),
+    ("Random", 112)
 ]
 
 
@@ -271,27 +271,29 @@ def refresh_ports():
     
     dpg.configure_item("port_combo", items=port_labels)
     
-    # Auto-select and connect to LeslieLEDs device if found
-    for label in port_labels:
-        if "LeslieLEDs" in label or "M5Stack" in label:
-            dpg.set_value("port_combo", label)
-            port_type, port_id = port_map[label]
-            if controller.connect_port(port_type, port_id):
-                mode_text = "Serial MIDI" if port_type == "SERIAL" else "USB MIDI"
-                dpg.set_value("status_text", f"Connected ({mode_text}): {label}")
-                dpg.configure_item("status_text", color=(100, 255, 100))
-            return
+    def attempt_connect(label: str) -> bool:
+        port_type, port_id = port_map[label]
+        if controller.connect_port(port_type, port_id):
+            mode_text = "Serial MIDI" if port_type == "SERIAL" else "USB MIDI"
+            dpg.set_value("status_text", f"Connected ({mode_text}): {label}")
+            dpg.configure_item("status_text", color=(100, 255, 100))
+            return True
+        return False
+
+    preferred_keywords = ["midi2dmxnow", "leslieleds", "m5stack"]
+    for keyword in preferred_keywords:
+        for label in port_labels:
+            if keyword in label.lower():
+                dpg.set_value("port_combo", label)
+                if attempt_connect(label):
+                    return
     
     # If no LeslieLEDs found, try to find "USB Single Serial" port
     for label in port_labels:
         if "USB Single Serial" in label:
             dpg.set_value("port_combo", label)
-            port_type, port_id = port_map[label]
-            if controller.connect_port(port_type, port_id):
-                mode_text = "Serial MIDI" if port_type == "SERIAL" else "USB MIDI"
-                dpg.set_value("status_text", f"Connected ({mode_text}): {label}")
-                dpg.configure_item("status_text", color=(100, 255, 100))
-            return
+            if attempt_connect(label):
+                return
     
     # If no auto-select, just select first port if available
     if port_labels:
@@ -324,9 +326,19 @@ def on_cc_slider(sender, app_data, user_data):
 
 def on_animation_mode(sender, app_data):
     """Handle animation mode selection"""
-    mode_index = ANIMATION_MODES.index(app_data)
-    # Map to CC value ranges (0-9 for mode 0, 10-19 for mode 1, etc.)
-    cc_value = mode_index * 10 + 5  # Middle of range
+    label_to_mode = {label: mode for label, mode in ANIMATION_MODES}
+    mode_index = label_to_mode.get(app_data)
+    if mode_index is None:
+        return
+
+    valid_values = [
+        value for value in range(128)
+        if ((value * ANIM_MODE_COUNT_FIRMWARE + 64) // 128) == mode_index
+    ]
+    if not valid_values:
+        cc_value = 0
+    else:
+        cc_value = valid_values[len(valid_values) // 2]
     controller.send_cc(CC_ANIMATION_MODE, cc_value)
 
 
@@ -392,7 +404,7 @@ def create_gui():
         with dpg.collapsing_header(label="Global Controls", default_open=True):
             
             dpg.add_text("Animation Mode:")
-            dpg.add_combo(ANIMATION_MODES, default_value=ANIMATION_MODES[0], 
+            dpg.add_combo(ANIMATION_MODE_OPTIONS, default_value=ANIMATION_MODE_OPTIONS[0], 
                          callback=on_animation_mode, width=200)
             
             dpg.add_spacer(height=5)

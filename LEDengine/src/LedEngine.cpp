@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 
+
 #if defined(ARDUINO_ARCH_ESP32)
 #include <esp_random.h>
 #endif
@@ -124,14 +125,9 @@ void ColorRGBW::fromHSV(uint8_t hue, uint8_t sat, uint8_t val, uint8_t white) {
     w = white;
 }
 
-CRGB ColorRGBW::toCRGB() const {
-    return CRGB(r, g, b);
-}
-
 LedEngine::LedEngine(const LedEngineConfig& config)
     : _config(config),
       _state(),
-             _lastRenderedState(),
       _renderBuffer(nullptr),
       _hwBuffer(nullptr),
     _strand(nullptr),
@@ -294,14 +290,15 @@ void LedEngine::renderTaskTrampoline(void* param) {
 
 void LedEngine::renderTaskLoop() {
 #if defined(ARDUINO_ARCH_ESP32)
-    const TickType_t frameDelay = pdMS_TO_TICKS(50); // ~20 FPS
+    TickType_t lastWake = xTaskGetTickCount();
     while (true) {
-        TickType_t startTick = xTaskGetTickCount();
         serviceRenderTick();
-        TickType_t elapsed = xTaskGetTickCount() - startTick;
-        if (elapsed < frameDelay) {
-            vTaskDelay(frameDelay - elapsed);
+        uint32_t intervalMs = _frameIntervalMs == 0 ? 16 : _frameIntervalMs;
+        TickType_t frameTicks = pdMS_TO_TICKS(intervalMs);
+        if (frameTicks == 0) {
+            frameTicks = 1;
         }
+        vTaskDelayUntil(&lastWake, frameTicks);
     }
 #endif
 }
@@ -350,7 +347,6 @@ void LedEngine::serviceRenderTick() {
     }
 
     renderFrame(clockMillis);
-    _lastRenderedState = _state;
     presentFrame();
 }
 
@@ -797,25 +793,6 @@ void LedEngine::calculateFPS() {
         _frameCount = 0;
         _fpsTimer = now;
     }
-}
-
-bool LedEngine::statesEqual(const LedEngineState& a, const LedEngineState& b) const {
-    if (a.masterBrightness != b.masterBrightness) return false;
-    if (a.mode != b.mode) return false;
-    if (a.animationSpeed != b.animationSpeed) return false;
-    if (a.animationCtrl != b.animationCtrl) return false;
-    if (a.strobeRate != b.strobeRate) return false;
-    if (a.blendMode != b.blendMode) return false;
-    if (a.mirror != b.mirror) return false;
-    if (a.direction != b.direction) return false;
-
-    auto colorsEqual = [](const ColorRGBW& lhs, const ColorRGBW& rhs) {
-        return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b && lhs.w == rhs.w;
-    };
-
-    if (!colorsEqual(a.colorA, b.colorA)) return false;
-    if (!colorsEqual(a.colorB, b.colorB)) return false;
-    return true;
 }
 
 } // namespace LedEngineLib
