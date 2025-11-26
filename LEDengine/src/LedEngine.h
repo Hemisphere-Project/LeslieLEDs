@@ -123,6 +123,7 @@ private:
     bool _initialized;
     uint32_t _animationPhase;
     uint32_t _lastUpdateClock;
+    uint32_t _lastLocalMillis;
     uint32_t _frameIntervalMs;
     uint32_t _frameCount;
     uint32_t _fpsTimer;
@@ -133,6 +134,7 @@ private:
     LedEngineState _pendingState;
     bool _stateDirty;
     uint32_t _pendingClockMillis;
+    uint32_t _pendingLocalMillis;
 
     static void renderTaskTrampoline(void* param);
     void renderTaskLoop();

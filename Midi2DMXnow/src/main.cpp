@@ -34,9 +34,6 @@ uint8_t dmxFrame[DMX_UNIVERSE_SIZE];
 unsigned long lastDMXSend = 0;
 const uint32_t DMX_SEND_INTERVAL = 33; // ~30Hz DMX refresh rate
 
-// Track ESP-NOW send errors for display diagnostics
-volatile uint32_t espnowSendErrors = 0;
-
 // Quick RGBW sweep lets us spot wiring faults before DMX starts
 void playBootRGBWTest() {
   if (!ledEngine) {
@@ -63,8 +60,10 @@ void playBootRGBWTest() {
   for (uint8_t i = 0; i < 4; ++i) {
     testState.colorA = testColors[i];
     testState.colorB = testColors[i];
-    ledEngine->update(millis(), testState);
-    ledEngine->show();
+  ledEngine->update(millis(), testState);
+#if !defined(ARDUINO_ARCH_ESP32)
+  ledEngine->show();
+#endif
     delay(150);
   }
 
@@ -72,7 +71,9 @@ void playBootRGBWTest() {
   testState.colorA = ColorRGBW(0, 0, 0, 0);
   testState.colorB = testState.colorA;
   ledEngine->update(millis(), testState);
+#if !defined(ARDUINO_ARCH_ESP32)
   ledEngine->show();
+#endif
 }
 
 // ========================================
@@ -123,16 +124,10 @@ void setup() {
 
   // Initialize ESPNow DMX sender (reuse MeshClock's ESP-NOW stack)
   espnowDMX.setUniverseId(DMX_UNIVERSE_ID);
-  bool senderOk = espnowDMX.begin(ESPNOW_DMX_MODE_SENDER, false);
-  
-  // Visual indicator: flash red if sender init failed
-  if (!senderOk) {
-    for (int i = 0; i < 10; i++) {
-      M5.Display.fillScreen(0xF800); // Red
-      delay(200);
-      M5.Display.fillScreen(0x0000); // Black
-      delay(200);
-    }
+  if (!espnowDMX.begin(ESPNOW_DMX_MODE_SENDER, false)) {
+    #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
+      Serial.println("[ERR] Failed to initialize ESPNowDMX sender");
+    #endif
     while (true) {
       delay(1000);
     }
@@ -167,7 +162,9 @@ void loop() {
   if (ledEngine) {
     LedEngineState state = dmxState.toLedEngineState();
     ledEngine->update(meshClock.meshMillis(), state);
+#if !defined(ARDUINO_ARCH_ESP32)
     ledEngine->show();
+#endif
   }
 
   displayHandler.update();
@@ -183,14 +180,9 @@ void loop() {
     // Broadcast DMX via ESP-NOW
     espnowDMX.sendDMXFrame(dmxFrame, DMX_UNIVERSE_SIZE);
     
-    // Visual confirmation: blink built-in LED on each send attempt
-    static int frameCount = 0;
-    if (++frameCount % 30 == 0) {
-      M5.Display.setBrightness(frameCount % 60 == 0 ? 255 : 32);
-    }
-    
     #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
-      if (frameCount % 100 == 0) {
+      static int frameCount = 0;
+      if (++frameCount % 100 == 0) {
         Serial.printf("Sent %d DMX frames, Clock: %lu ms\n", 
                 frameCount, meshClock.meshMillis());
       }

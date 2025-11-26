@@ -133,17 +133,19 @@ LedEngine::LedEngine(const LedEngineConfig& config)
     _strand(nullptr),
       _previewBuffer(nullptr),
       _initialized(false),
-      _animationPhase(0),
-      _lastUpdateClock(0),
+    _animationPhase(0),
+    _lastUpdateClock(0),
+    _lastLocalMillis(0),
       _frameIntervalMs(config.targetFPS == 0 ? 16 : 1000 / config.targetFPS),
       _frameCount(0),
       _fpsTimer(0),
       _fps(0),
       _renderTaskHandle(nullptr),
       _stateMutex(nullptr),
-      _bufferMutex(nullptr),
-      _stateDirty(false),
-      _pendingClockMillis(0) {
+    _bufferMutex(nullptr),
+    _stateDirty(false),
+    _pendingClockMillis(0),
+    _pendingLocalMillis(0) {
     _state.masterBrightness = _config.defaultBrightness;
     _state.colorA = ColorRGBW(0, 0, 0, 0);
     _state.colorB = ColorRGBW(0, 0, 0, 0);
@@ -270,6 +272,7 @@ void LedEngine::update(uint32_t clockMillis, const LedEngineState& state) {
     if (_stateMutex && xSemaphoreTake(_stateMutex, portMAX_DELAY) == pdTRUE) {
         _pendingState = state;
         _pendingClockMillis = clockMillis;
+        _pendingLocalMillis = millis();
         _stateDirty = true;
         xSemaphoreGive(_stateMutex);
     }
@@ -278,6 +281,7 @@ void LedEngine::update(uint32_t clockMillis, const LedEngineState& state) {
     _pendingState = state;
     _stateDirty = true;
     _pendingClockMillis = clockMillis;
+    _pendingLocalMillis = millis();
     serviceRenderTick();
 #endif
 }
@@ -308,7 +312,13 @@ void LedEngine::serviceRenderTick() {
         return;
     }
 
-    uint32_t clockMillis = millis();
+    uint32_t localMillis = millis();
+    uint32_t clockMillis = 0;
+    uint32_t prevClock = _lastUpdateClock;
+    uint32_t prevLocal = _lastLocalMillis;
+    uint32_t anchorClock = prevClock;
+    uint32_t anchorLocal = prevLocal;
+
 #if defined(ARDUINO_ARCH_ESP32)
     if (_stateMutex && xSemaphoreTake(_stateMutex, portMAX_DELAY) == pdTRUE) {
         if (_stateDirty) {
@@ -316,8 +326,17 @@ void LedEngine::serviceRenderTick() {
             _stateDirty = false;
         }
         if (_pendingClockMillis != 0) {
-            clockMillis = _pendingClockMillis;
+            uint32_t pendingClock = _pendingClockMillis;
+            uint32_t pendingLocal = _pendingLocalMillis;
+            if (pendingLocal == 0) {
+                pendingLocal = localMillis;
+            }
             _pendingClockMillis = 0;
+            _pendingLocalMillis = 0;
+            uint32_t delta = localMillis - pendingLocal;
+            clockMillis = pendingClock + delta;
+            anchorClock = clockMillis;
+            anchorLocal = localMillis;
         }
         xSemaphoreGive(_stateMutex);
     }
@@ -325,22 +344,47 @@ void LedEngine::serviceRenderTick() {
     if (_stateDirty) {
         _state = _pendingState;
         _stateDirty = false;
-        clockMillis = _pendingClockMillis;
+    }
+    if (_pendingClockMillis != 0) {
+        uint32_t pendingLocal = _pendingLocalMillis;
+        if (pendingLocal == 0) {
+            pendingLocal = localMillis;
+        }
+        uint32_t delta = localMillis - pendingLocal;
+        clockMillis = _pendingClockMillis + delta;
+        anchorClock = clockMillis;
+        anchorLocal = localMillis;
         _pendingClockMillis = 0;
+        _pendingLocalMillis = 0;
     }
 #endif
+
+    if (clockMillis == 0) {
+        if (anchorClock != 0 && anchorLocal != 0) {
+            uint32_t delta = localMillis - anchorLocal;
+            clockMillis = anchorClock + delta;
+            anchorClock = clockMillis;
+            anchorLocal = localMillis;
+        } else {
+            clockMillis = localMillis;
+            anchorClock = clockMillis;
+            anchorLocal = localMillis;
+        }
+    }
+
+    _lastUpdateClock = anchorClock;
+    _lastLocalMillis = anchorLocal;
 
     if (_frameIntervalMs == 0) {
         _frameIntervalMs = 16;
     }
 
-    uint32_t elapsed = (_lastUpdateClock == 0) ? _frameIntervalMs : (clockMillis - _lastUpdateClock);
+    uint32_t elapsed = (prevClock == 0) ? _frameIntervalMs : (clockMillis - prevClock);
     if (elapsed == 0) {
         elapsed = 1;
     }
 
     _animationPhase += static_cast<uint32_t>(_state.animationSpeed) * elapsed;
-    _lastUpdateClock = clockMillis;
 
     if (_strand) {
         _strand->brightLimit = _state.masterBrightness;
