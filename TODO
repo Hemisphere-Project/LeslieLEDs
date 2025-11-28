@@ -2,9 +2,22 @@ Midi2DMXnow
 ----
 - Long push screen: set all receiver in Wifi + OTA mode
 - Short push: remove logs page, iterate memory load
+- DMX out..
 
 
 DMXnow2Strip
 ----
 - inbuilt led (red on boot, green after DMX frame received)
 - OTA flash (switch to wifi+OTA from a special Sender message)
+- delay on boot (prevent too fast boot...)
+
+
+Controller
+----
+- get values from sender (ie for scene load set faders)
+
+
+All
+----
+- distinct id/channel for animation offset
+- send animation start offset (otherwise anim not synced !)
