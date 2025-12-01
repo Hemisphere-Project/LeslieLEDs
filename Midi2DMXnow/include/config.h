@@ -113,6 +113,16 @@
 // Channels 16-31 reserved for future use
 
 // ========================================
+// Physical DMX Output Configuration
+// ========================================
+// AtomS3 PortC UART pins
+#define DMX_OUTPUT_TX_PIN 5
+#define DMX_OUTPUT_RX_PIN 6
+#define DMX_OUTPUT_ENABLE_PIN 255     // Not used (no RS485 transceiver enable)
+#define DMX_OUTPUT_PORT 1             // ESP32 DMX port number
+#define DMX_OUTPUT_REFRESH_MS 33      // ~30Hz refresh rate
+
+// ========================================
 // Scene Configuration
 // ========================================
 #define MAX_SCENES 10

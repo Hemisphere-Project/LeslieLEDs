@@ -1,7 +1,6 @@
 Midi2DMXnow
 ----
 - Long push screen: set all receiver in Wifi + OTA mode
-- Short push: remove logs page, iterate memory load
 - DMX out..
 
 
@@ -20,4 +19,3 @@ Controller
 All
 ----
 - distinct id/channel for animation offset
-- send animation start offset (otherwise anim not synced !)

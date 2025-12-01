@@ -19,7 +19,12 @@ public:
     void setDMXState(DMXState* state);
     void logMessage(const char* message);
     void showSceneNotification(uint8_t sceneNumber, bool isSave);
+    
+    // Button press now loads next scene
     void handleButtonPress();
+    
+    // Track current scene (called when scene changes via MIDI or button)
+    void setCurrentScene(int8_t scene) { _currentScene = scene; }
 
 private:
     LedEngineLib::LedEngine* _ledEngine;
@@ -38,32 +43,14 @@ private:
     uint8_t _sceneNotificationNumber;
     bool _sceneNotificationIsSave;
     bool _needsFullRedraw;
-    uint8_t _currentPage;
+    int8_t _currentScene;  // Current scene (0-9), -1 if none
     unsigned long _lastPreviewUpdate;
 
-    struct DisplayState {
-        LedEngineLib::AnimationMode mode;
-        uint8_t brightness;
-        uint8_t speed;
-        LedEngineLib::ColorRGBW colorA;
-        LedEngineLib::ColorRGBW colorB;
-        uint8_t fps;
-        int lastLogIndex;
-    } _lastState;
-
-    static constexpr uint8_t PAGE_COUNT = 3;
     LedPreviewRenderer _previewRenderer;
 
-    void drawUI();
-    void drawPagePreview();
-    void drawPageParameters();
-    void drawPageLogs();
-    void drawStatusBar();
-    void drawInfoPanel();
-    void drawMessageLog();
+    void drawPreview();
+    void drawSceneIndicator();
     void drawSceneNotification();
-    bool hasStateChanged();
-    LedEngineLib::LedEngineState currentEngineState() const;
 };
 
 #endif // DISPLAY_HANDLER_H

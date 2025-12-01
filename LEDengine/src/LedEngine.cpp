@@ -395,12 +395,9 @@ void LedEngine::serviceRenderTick() {
         _frameIntervalMs = 16;
     }
 
-    uint32_t elapsed = (prevClock == 0) ? _frameIntervalMs : (clockMillis - prevClock);
-    if (elapsed == 0) {
-        elapsed = 1;
-    }
-
-    _animationPhase += static_cast<uint32_t>(_state.animationSpeed) * elapsed;
+    // Absolute phase calculation from meshMillis for perfect sync across receivers
+    // All devices with the same clockMillis will compute identical animation phase
+    _animationPhase = clockMillis * static_cast<uint32_t>(_state.animationSpeed);
 
     if (_strand) {
         _strand->brightLimit = _state.masterBrightness;

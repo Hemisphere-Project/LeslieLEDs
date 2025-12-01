@@ -5,6 +5,7 @@
 #include <LedEngine.h>
 #include "config.h"
 #include "dmx_state.h"
+#include "dmx_output.h"
 #include "display_handler.h"
 
 // Platform-specific MIDI handler
@@ -25,6 +26,7 @@ DMXState dmxState;
 ESPNowDMX espnowDMX;
 ESPNowMeshClock meshClock;
 DisplayHandler displayHandler;
+PhysicalDMXOutput physicalDMX;
 
 // LED monitoring strip
 LedEngineConfig ledConfig;
@@ -133,6 +135,20 @@ void setup() {
     }
   }
   
+  // Initialize Physical DMX output on PortC
+  PhysicalDMXOutput::Config dmxOutputConfig;
+  dmxOutputConfig.txPin = DMX_OUTPUT_TX_PIN;
+  dmxOutputConfig.rxPin = DMX_OUTPUT_RX_PIN;
+  dmxOutputConfig.enablePin = DMX_OUTPUT_ENABLE_PIN;
+  dmxOutputConfig.dmxPort = DMX_OUTPUT_PORT;
+  dmxOutputConfig.refreshIntervalMs = DMX_OUTPUT_REFRESH_MS;
+  
+  if (!physicalDMX.begin(dmxOutputConfig)) {
+    #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
+      Serial.println("[WARN] Physical DMX output failed to initialize");
+    #endif
+  }
+  
   #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
     Serial.println("Setup complete - Ready for MIDI");
     Serial.println("Broadcasting DMX over ESP-NOW");
@@ -188,6 +204,10 @@ void loop() {
       }
     #endif
   }
+  
+  // Update physical DMX output (RGBW on channels 1-4)
+  // Uses its own rate limiting internally
+  physicalDMX.update(dmxFrame, meshClock.meshMillis());
   
   yield();
 }

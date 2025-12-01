@@ -99,6 +99,10 @@ private:
     Preferences _preferences;
     bool _prefsReady;
     
+    // Blackout state (for hold-to-show behavior)
+    uint8_t _storedBrightness;  // Brightness before blackout
+    bool _isBlackout;           // Currently in blackout state
+    
     // Scene management
     void loadScene(uint8_t sceneIndex);
     void saveCurrentAsScene(uint8_t sceneIndex);

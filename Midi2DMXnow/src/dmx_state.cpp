@@ -36,6 +36,8 @@ DMXState::DMXState()
     , _sceneSaveMode(false)
     , _currentScene(-1)
     , _prefsReady(false)
+    , _storedBrightness(128)
+    , _isBlackout(false)
 {
     // Initialize with default colors (HSV format)
     _colorA = HSVColor(0, 255, 255, 0);      // Red
@@ -144,6 +146,13 @@ void DMXState::handleColorCC(uint8_t colorBank, byte controller, byte value) {
 
 DMXState::SceneEvent DMXState::handleNoteOn(byte note, byte velocity) {
     SceneEvent event;
+    
+    // Velocity 0 is treated as note-off
+    if (velocity == 0) {
+        handleNoteOff(note);
+        return event;
+    }
+    
     // Scene recall notes (36-45)
     if (note >= NOTE_SCENE_1 && note <= NOTE_SCENE_10) {
         uint8_t sceneIndex = note - NOTE_SCENE_1;
@@ -161,6 +170,11 @@ DMXState::SceneEvent DMXState::handleNoteOn(byte note, byte velocity) {
         } else {
             // Load mode: recall scene
             loadScene(sceneIndex);
+            // Restore from blackout if needed
+            if (_isBlackout) {
+                _masterBrightness = _storedBrightness;
+                _isBlackout = false;
+            }
             #if DEBUG_MODE
             Serial.printf("Loaded scene %d\n", sceneIndex + 1);
             #endif
@@ -168,7 +182,11 @@ DMXState::SceneEvent DMXState::handleNoteOn(byte note, byte velocity) {
     }
     // Blackout note
     else if (note == NOTE_BLACKOUT) {
+        if (!_isBlackout) {
+            _storedBrightness = _masterBrightness;
+        }
         _masterBrightness = 0;
+        _isBlackout = true;
         event.triggered = true;
         event.blackout = true;
         #if DEBUG_MODE
@@ -179,7 +197,17 @@ DMXState::SceneEvent DMXState::handleNoteOn(byte note, byte velocity) {
 }
 
 void DMXState::handleNoteOff(byte note) {
-    // Currently no action on note off
+    // Scene note release (36-45) triggers blackout
+    if (note >= NOTE_SCENE_1 && note <= NOTE_SCENE_10) {
+        if (!_isBlackout) {
+            _storedBrightness = _masterBrightness;
+        }
+        _masterBrightness = 0;
+        _isBlackout = true;
+        #if DEBUG_MODE
+        Serial.println("Scene note released - blackout");
+        #endif
+    }
 }
 
 void DMXState::toDMXFrame(uint8_t* dmxData, uint16_t size) {
