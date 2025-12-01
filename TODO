@@ -1,7 +1,6 @@
 Midi2DMXnow
 ----
 - Long push screen: set all receiver in Wifi + OTA mode
-- DMX out..
 
 
 DMXnow2Strip
@@ -14,8 +13,14 @@ DMXnow2Strip
 Controller
 ----
 - get values from sender (ie for scene load set faders)
+- launcher (check unique, more beautifull)
 
 
 All
 ----
 - distinct id/channel for animation offset
+
+
+Animation:
+Waveform = use Animation control to change amplitude depth
+Rainbow = set start and stop color

@@ -153,9 +153,13 @@ DMXState::SceneEvent DMXState::handleNoteOn(byte note, byte velocity) {
         return event;
     }
     
-    // Scene recall notes (36-45)
-    if (note >= NOTE_SCENE_1 && note <= NOTE_SCENE_10) {
-        uint8_t sceneIndex = note - NOTE_SCENE_1;
+    // Scene recall notes (36-55 for scenes 1-20)
+    int8_t sceneIndex = -1;
+    if (note >= NOTE_SCENE_1 && note <= NOTE_SCENE_20) {
+        sceneIndex = note - NOTE_SCENE_1;  // 0-19
+    }
+    
+    if (sceneIndex >= 0 && sceneIndex < MAX_SCENES) {
         event.triggered = true;
         event.sceneIndex = sceneIndex;
         
@@ -170,35 +174,24 @@ DMXState::SceneEvent DMXState::handleNoteOn(byte note, byte velocity) {
         } else {
             // Load mode: recall scene
             loadScene(sceneIndex);
-            // Restore from blackout if needed
-            if (_isBlackout) {
-                _masterBrightness = _storedBrightness;
-                _isBlackout = false;
-            }
+            // Clear blackout state - scene provides its own brightness
+            _isBlackout = false;
+            // Store brightness for potential future blackout restore
+            _storedBrightness = _masterBrightness;
             #if DEBUG_MODE
             Serial.printf("Loaded scene %d\n", sceneIndex + 1);
             #endif
         }
     }
-    // Blackout note
-    else if (note == NOTE_BLACKOUT) {
-        if (!_isBlackout) {
-            _storedBrightness = _masterBrightness;
-        }
-        _masterBrightness = 0;
-        _isBlackout = true;
-        event.triggered = true;
-        event.blackout = true;
-        #if DEBUG_MODE
-        Serial.println("Blackout triggered");
-        #endif
-    }
     return event;
 }
 
 void DMXState::handleNoteOff(byte note) {
-    // Scene note release (36-45) triggers blackout
-    if (note >= NOTE_SCENE_1 && note <= NOTE_SCENE_10) {
+    // Scene note release triggers blackout
+    // Notes 36-55 (scenes 1-20)
+    bool isSceneNote = (note >= NOTE_SCENE_1 && note <= NOTE_SCENE_20);
+    
+    if (isSceneNote) {
         if (!_isBlackout) {
             _storedBrightness = _masterBrightness;
         }

@@ -79,7 +79,16 @@
 #define NOTE_SCENE_8 43
 #define NOTE_SCENE_9 44
 #define NOTE_SCENE_10 45
-#define NOTE_BLACKOUT 48
+#define NOTE_SCENE_11 46
+#define NOTE_SCENE_12 47
+#define NOTE_SCENE_13 48
+#define NOTE_SCENE_14 49
+#define NOTE_SCENE_15 50
+#define NOTE_SCENE_16 51
+#define NOTE_SCENE_17 52
+#define NOTE_SCENE_18 53
+#define NOTE_SCENE_19 54
+#define NOTE_SCENE_20 55
 
 // ========================================
 // DMX Configuration
@@ -125,7 +134,7 @@
 // ========================================
 // Scene Configuration
 // ========================================
-#define MAX_SCENES 10
+#define MAX_SCENES 20
 
 // ========================================
 // Debug Configuration

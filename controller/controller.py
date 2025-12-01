@@ -39,8 +39,33 @@ CC_COLOR_B_WHITE = 33
 CC_SCENE_SAVE_MODE = 127
 
 # Note mappings for scenes
+# Scenes 1-20: notes 36-55
 NOTE_SCENE_1 = 36
-NOTE_BLACKOUT = 48
+MAX_SCENES = 20
+
+def scene_index_to_note(scene_index):
+    """Convert scene index (0-19) to MIDI note"""
+    return NOTE_SCENE_1 + scene_index  # 36-55
+
+# Default values for all sliders (CC number -> default value)
+DEFAULT_VALUES = {
+    CC_MASTER_BRIGHTNESS: 64,   # Half brightness
+    CC_ANIMATION_SPEED: 64,     # Medium speed
+    CC_ANIMATION_CTRL: 0,       # No control offset
+    CC_STROBE_RATE: 0,          # No strobe
+    CC_BLEND_MODE: 0,           # Default blend
+    CC_MIRROR_MODE: 0,          # No mirror
+    CC_DIRECTION: 16,           # Forward
+    CC_ANIMATION_MODE: 0,       # Solid
+    CC_COLOR_A_HUE: 0,          # Red
+    CC_COLOR_A_SATURATION: 127, # Full saturation
+    CC_COLOR_A_VALUE: 127,      # Full brightness
+    CC_COLOR_A_WHITE: 0,        # No white
+    CC_COLOR_B_HUE: 64,         # Cyan-ish
+    CC_COLOR_B_SATURATION: 127, # Full saturation
+    CC_COLOR_B_VALUE: 127,      # Full brightness
+    CC_COLOR_B_WHITE: 0,        # No white
+}
 
 # Animation modes exposed in the UI (firmware still supports 10 total modes)
 ANIM_MODE_COUNT_FIRMWARE = 10
@@ -360,13 +385,55 @@ def on_direction_mode(sender, app_data):
 
 def on_scene_button(sender, app_data, user_data):
     """Handle scene button press"""
-    scene_note = NOTE_SCENE_1 + user_data
+    scene_note = scene_index_to_note(user_data)
     controller.send_note(scene_note)
+    
+    # Auto-unarm save mode after clicking a scene button
+    if controller.scene_save_mode:
+        controller.scene_save_mode = False
+        controller.send_cc(CC_SCENE_SAVE_MODE, 0)
+        # Update the checkbox in the GUI
+        dpg.set_value("save_mode_checkbox", False)
+        update_scene_button_colors()
 
 
-def on_blackout_button():
-    """Handle blackout button"""
-    controller.send_note(NOTE_BLACKOUT)
+def on_reset_button():
+    """Reset all sliders to default values and send to MIDI receiver"""
+    # Map CC numbers to their slider tags
+    cc_to_slider = {
+        CC_MASTER_BRIGHTNESS: "cc_1_slider",
+        CC_ANIMATION_SPEED: "cc_2_slider",
+        CC_ANIMATION_CTRL: "cc_3_slider",
+        CC_STROBE_RATE: "cc_4_slider",
+        CC_BLEND_MODE: "cc_5_slider",
+        CC_COLOR_A_HUE: "cc_20_slider",
+        CC_COLOR_A_SATURATION: "cc_21_slider",
+        CC_COLOR_A_VALUE: "cc_22_slider",
+        CC_COLOR_A_WHITE: "cc_23_slider",
+        CC_COLOR_B_HUE: "cc_30_slider",
+        CC_COLOR_B_SATURATION: "cc_31_slider",
+        CC_COLOR_B_VALUE: "cc_32_slider",
+        CC_COLOR_B_WHITE: "cc_33_slider",
+    }
+    
+    # Reset each slider and send CC
+    for cc_number, default_value in DEFAULT_VALUES.items():
+        # Update slider if it exists
+        slider_tag = cc_to_slider.get(cc_number)
+        if slider_tag and dpg.does_item_exist(slider_tag):
+            dpg.set_value(slider_tag, default_value)
+        
+        # Send CC value
+        controller.send_cc(cc_number, default_value)
+    
+    # Reset animation mode combo
+    dpg.set_value("animation_mode_combo", ANIMATION_MODE_OPTIONS[0])
+    
+    # Reset mirror mode combo
+    dpg.set_value("mirror_mode_combo", MIRROR_MODES[0][0])
+    
+    # Reset direction mode combo
+    dpg.set_value("direction_mode_combo", DIRECTION_MODES[0][0])
 
 
 def toggle_scene_save_mode(sender, app_data):
@@ -374,11 +441,30 @@ def toggle_scene_save_mode(sender, app_data):
     controller.scene_save_mode = app_data
     value = 64 if app_data else 0  # >37 = save mode, 0 = load mode
     controller.send_cc(CC_SCENE_SAVE_MODE, value)
+    update_scene_button_colors()
+
+
+def update_scene_button_colors():
+    """Update scene button colors based on save mode"""
+    for i in range(20):
+        if controller.scene_save_mode:
+            # Red color for save mode
+            dpg.bind_item_theme(f"scene_btn_{i}", "save_mode_theme")
+        else:
+            # Unbind theme to use default
+            dpg.bind_item_theme(f"scene_btn_{i}", 0)
 
 
 def create_gui():
     """Create the DearPyGUI interface"""
     dpg.create_context()
+    
+    # Create theme for save mode (red buttons)
+    with dpg.theme(tag="save_mode_theme"):
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (180, 40, 40, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (220, 60, 60, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (150, 30, 30, 255))
     
     # Main window
     with dpg.window(label="LeslieLEDs Controller", tag="main_window"):
@@ -404,12 +490,13 @@ def create_gui():
         with dpg.collapsing_header(label="Global Controls", default_open=True):
             
             dpg.add_text("Animation Mode:")
-            dpg.add_combo(ANIMATION_MODE_OPTIONS, default_value=ANIMATION_MODE_OPTIONS[0], 
+            dpg.add_combo(ANIMATION_MODE_OPTIONS, tag="animation_mode_combo",
+                         default_value=ANIMATION_MODE_OPTIONS[0], 
                          callback=on_animation_mode, width=200)
             
             dpg.add_spacer(height=5)
             dpg.add_text("Master Brightness:")
-            dpg.add_slider_int(label="##brightness", tag="cc_1_slider", default_value=128, min_value=0, max_value=255,
+            dpg.add_slider_int(label="##brightness", tag="cc_1_slider", default_value=64, min_value=0, max_value=127,
                               callback=on_cc_slider, user_data=CC_MASTER_BRIGHTNESS, width=300)
             
             dpg.add_text("Animation Speed:")
@@ -429,11 +516,13 @@ def create_gui():
                               callback=on_cc_slider, user_data=CC_BLEND_MODE, width=300)
             
             dpg.add_text("Mirror Mode:")
-            dpg.add_combo([name for name, _ in MIRROR_MODES], default_value=MIRROR_MODES[0][0],
+            dpg.add_combo([name for name, _ in MIRROR_MODES], tag="mirror_mode_combo",
+                         default_value=MIRROR_MODES[0][0],
                          callback=on_mirror_mode, width=200)
             
             dpg.add_text("Direction:")
-            dpg.add_combo([name for name, _ in DIRECTION_MODES], default_value=DIRECTION_MODES[0][0],
+            dpg.add_combo([name for name, _ in DIRECTION_MODES], tag="direction_mode_combo",
+                         default_value=DIRECTION_MODES[0][0],
                          callback=on_direction_mode, width=200)
         
         dpg.add_separator()
@@ -482,31 +571,50 @@ def create_gui():
         with dpg.collapsing_header(label="Scenes", default_open=True):
             
             dpg.add_checkbox(label="Scene Save Mode (>37 to save)", 
-                           callback=toggle_scene_save_mode)
+                           callback=toggle_scene_save_mode,
+                           tag="save_mode_checkbox")
             
             dpg.add_spacer(height=5)
             dpg.add_text("Scene Buttons:")
             
-            # Scene buttons in two rows
+            # Scene buttons in four rows of 5
             with dpg.group(horizontal=True):
                 for i in range(5):
-                    dpg.add_button(label=f"Scene {i+1}", 
+                    dpg.add_button(label=f"{i+1}", 
                                  callback=on_scene_button, 
                                  user_data=i,
-                                 width=70)
+                                 width=60,
+                                 tag=f"scene_btn_{i}")
             
             with dpg.group(horizontal=True):
                 for i in range(5, 10):
-                    dpg.add_button(label=f"Scene {i+1}", 
+                    dpg.add_button(label=f"{i+1}", 
                                  callback=on_scene_button, 
                                  user_data=i,
-                                 width=70)
+                                 width=60,
+                                 tag=f"scene_btn_{i}")
+            
+            with dpg.group(horizontal=True):
+                for i in range(10, 15):
+                    dpg.add_button(label=f"{i+1}", 
+                                 callback=on_scene_button, 
+                                 user_data=i,
+                                 width=60,
+                                 tag=f"scene_btn_{i}")
+            
+            with dpg.group(horizontal=True):
+                for i in range(15, 20):
+                    dpg.add_button(label=f"{i+1}", 
+                                 callback=on_scene_button, 
+                                 user_data=i,
+                                 width=60,
+                                 tag=f"scene_btn_{i}")
             
             dpg.add_spacer(height=10)
-            dpg.add_button(label="BLACKOUT", callback=on_blackout_button, 
-                          width=200, height=40)
+            dpg.add_button(label="RESET", callback=on_reset_button, 
+                          width=200, height=30)
     
-    dpg.create_viewport(title="LeslieLEDs Controller", width=500, height=900)
+    dpg.create_viewport(title="LeslieLEDs Controller", width=500, height=950)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)

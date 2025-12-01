@@ -78,6 +78,9 @@ void playBootRGBWTest() {
 // Setup
 // ========================================
 void setup() {
+    // Boot delay - let power rails and WiFi radio stabilize after cold boot
+    delay(500);
+    
     // Initialize M5 (buttons/power) regardless of display presence
     auto cfg = M5.config();
     cfg.clear_display = true;
@@ -112,16 +115,38 @@ void setup() {
     meshClock.setUserCallback(ESPNowDMX::forwardPacket);
     meshClock.begin(true);
 
-    // Initialize ESPNow DMX receiver (reuse MeshClock's ESP-NOW instance)
+    // Initialize ESPNow DMX receiver with retry logic
     espnowDMX.setUniverseId(DMX_UNIVERSE_ID);
-    if (!espnowDMX.begin(ESPNOW_DMX_MODE_RECEIVER, false)) {
+    
+    const int maxRetries = 3;
+    bool espnowSuccess = false;
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
         #if DEBUG_MODE
-            Serial.println("[ERR] Failed to initialize ESPNowDMX receiver");
+            Serial.printf("[INFO] ESPNowDMX init attempt %d/%d\n", attempt, maxRetries);
         #endif
-        while (true) {
-            delay(1000);
+        
+        if (espnowDMX.begin(ESPNOW_DMX_MODE_RECEIVER, false)) {
+            espnowSuccess = true;
+            #if DEBUG_MODE
+                Serial.println("[OK] ESPNowDMX receiver initialized");
+            #endif
+            break;
         }
+        
+        #if DEBUG_MODE
+            Serial.println("[WARN] ESPNowDMX init failed, retrying...");
+        #endif
+        delay(200);  // Wait before retry
     }
+    
+    if (!espnowSuccess) {
+        #if DEBUG_MODE
+            Serial.println("[ERR] ESPNowDMX receiver failed after retries, restarting...");
+        #endif
+        delay(1000);
+        ESP.restart();
+    }
+    
     espnowDMX.setReceiveCallback(onDMXFrameReceived);
     
     #if DEBUG_MODE

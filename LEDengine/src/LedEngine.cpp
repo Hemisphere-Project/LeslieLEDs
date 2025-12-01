@@ -639,6 +639,12 @@ void LedEngine::renderWaveform() {
             break;
     }
 
+    // Use animationCtrl to set minimum brightness (depth)
+    // animationCtrl=0: oscillates 0-255 (full depth)
+    // animationCtrl=255: oscillates 255-255 (no depth, always max)
+    uint8_t minBrightness = _state.animationCtrl;
+    waveValue = minBrightness + scale8(waveValue, 255 - minBrightness);
+
     ColorRGBW waved = _state.colorA;
     waved.r = scale8(waved.r, waveValue);
     waved.g = scale8(waved.g, waveValue);
