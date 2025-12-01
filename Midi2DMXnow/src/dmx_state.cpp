@@ -242,6 +242,8 @@ LedEngineState DMXState::toLedEngineState() const {
     state.direction = decodeDirection(_direction);
     state.colorA.fromHSV(_colorA.hue, _colorA.saturation, _colorA.value, _colorA.white);
     state.colorB.fromHSV(_colorB.hue, _colorB.saturation, _colorB.value, _colorB.white);
+    state.colorA_hue = _colorA.hue;  // Store hue for rainbow animation
+    state.colorB_hue = _colorB.hue;  // Store hue for rainbow animation
     return state;
 }
 

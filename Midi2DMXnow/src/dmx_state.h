@@ -64,6 +64,11 @@ public:
     uint8_t getMasterBrightness() const { return _masterBrightness; }
     AnimationMode getCurrentMode() const { return _currentMode; }
     uint8_t getAnimationSpeed() const { return _animationSpeed; }
+    uint8_t getAnimationCtrl() const { return _animationCtrl; }
+    uint8_t getStrobeRate() const { return _strobeRate; }
+    uint8_t getBlendMode() const { return _blendMode; }
+    uint8_t getMirror() const { return _mirror; }
+    uint8_t getDirection() const { return _direction; }
     const HSVColor& getColorA() const { return _colorA; }
     const HSVColor& getColorB() const { return _colorB; }
     int8_t getCurrentScene() const { return _currentScene; }

@@ -673,18 +673,29 @@ void LedEngine::renderPulse(uint32_t clockMillis) {
 
 void LedEngine::renderRainbow() {
     uint8_t offset = (_animationPhase >> 8) & 0xFF;
+    
+    // Use colorA_hue and colorB_hue to define the hue range
+    uint8_t hueStart = _state.colorA_hue;
+    uint8_t hueEnd = _state.colorB_hue;
+    
+    // Calculate hue range (handles wrap-around)
+    int16_t hueRange = (int16_t)hueEnd - (int16_t)hueStart;
+    if (hueRange < 0) hueRange += 256;  // Wrap around the color wheel
 
     for (uint16_t i = 0; i < _config.ledCount; ++i) {
-        uint8_t hue = offset + (i * 255 / _config.ledCount);
+        // Map position to hue within the range
+        uint8_t hueOffset = (uint8_t)((uint32_t)i * hueRange / _config.ledCount);
+        uint8_t hue = hueStart + hueOffset + offset;
 
         switch (_state.direction) {
             case DIR_BACKWARD:
-                hue = 255 - hue;
+                hue = hueStart + (hueRange - hueOffset) + offset;
                 break;
             case DIR_PINGPONG:
                 if (((_animationPhase >> 16) & 0x1) == 1 && _config.ledCount > 0) {
                     uint16_t mirrored = (_config.ledCount - 1) - i;
-                    hue = offset + (mirrored * 255 / _config.ledCount);
+                    uint8_t mirroredOffset = (uint8_t)((uint32_t)mirrored * hueRange / _config.ledCount);
+                    hue = hueStart + mirroredOffset + offset;
                 }
                 break;
             case DIR_RANDOM:

@@ -16,6 +16,10 @@ import time
 # MIDI Configuration
 MIDI_CHANNEL = 0  # Channel 1 (0-indexed)
 
+# SysEx protocol constants
+SYSEX_MANUFACTURER_ID = 0x7D  # Non-commercial/educational
+SYSEX_MSG_STATE_DUMP = 0x01   # Full state dump message
+
 # CC Mappings from config.h
 CC_MASTER_BRIGHTNESS = 1
 CC_ANIMATION_SPEED = 2
@@ -102,20 +106,26 @@ DIRECTION_MODES = [
 class LeslieLEDsController:
     def __init__(self):
         self.midi_out: Optional[rtmidi.MidiOut] = None
-        self.midi_in: Optional[rtmidi.MidiIn] = None
+        self.midi_in: Optional[rtmidi.MidiIn] = None  # Virtual port for DAW
+        self.midi_device_in: Optional[rtmidi.MidiIn] = None  # Input from USB device
         self.midi_port_name: Optional[str] = None
         self.serial_port: Optional[serial.Serial] = None
         self.scene_save_mode = False
         self.virtual_port_thread = None
+        self.device_input_thread = None
         self.running = False
         self.is_serial_mode = False
         self._cc_last_time: dict[int, float] = {}
         self._cc_last_value: dict[int, int] = {}
         self._cc_min_interval = 0.004  # seconds between CC transmissions per control
+        self._active_scene: int = -1  # Currently active scene (-1 = none)
+        self._sysex_buffer: list = []  # Buffer for incoming SysEx
         
     def setup_midi(self):
         """Initialize MIDI output and virtual input"""
         self.midi_out = rtmidi.MidiOut()
+        self.midi_device_in = rtmidi.MidiIn()
+        self.midi_device_in.ignore_types(sysex=False)  # Enable SysEx reception
         
         # Create virtual MIDI IN port for DAW integration with custom client name
         self.midi_in = rtmidi.MidiIn(name="LeslieCTRLs")
@@ -152,6 +162,116 @@ class LeslieLEDsController:
                     if self.midi_out and self.midi_out.is_port_open():
                         self.midi_out.send_message(midi_message)
             time.sleep(0.001)  # Small delay to prevent CPU spinning
+    
+    def _device_midi_loop(self):
+        """Read incoming MIDI from USB device (for SysEx state sync)"""
+        while self.running and self.midi_device_in and self.midi_device_in.is_port_open():
+            msg = self.midi_device_in.get_message()
+            if msg:
+                midi_message, _ = msg
+                self._process_device_message(midi_message)
+            time.sleep(0.001)
+    
+    def _process_device_message(self, midi_message):
+        """Process incoming MIDI message from device"""
+        if not midi_message:
+            return
+        
+        # Check for SysEx message (starts with F0, ends with F7)
+        if midi_message[0] == 0xF0:
+            # Full SysEx message
+            if midi_message[-1] == 0xF7:
+                self._handle_sysex(midi_message)
+            else:
+                # Start of multi-part SysEx
+                self._sysex_buffer = list(midi_message)
+        elif self._sysex_buffer:
+            # Continue SysEx
+            self._sysex_buffer.extend(midi_message)
+            if 0xF7 in midi_message:
+                self._handle_sysex(self._sysex_buffer)
+                self._sysex_buffer = []
+    
+    def _handle_sysex(self, sysex_data):
+        """Parse and handle SysEx message from device"""
+        # Minimum valid message: F0 7D 01 <data> F7
+        if len(sysex_data) < 5:
+            return
+        
+        if sysex_data[1] != SYSEX_MANUFACTURER_ID:
+            return  # Not our message
+        
+        msg_type = sysex_data[2]
+        
+        if msg_type == SYSEX_MSG_STATE_DUMP and len(sysex_data) >= 21:
+            # State dump message - update all sliders
+            # Data is at indices 3-19 (17 bytes), scaled from 0-127
+            self._update_slider_from_sysex(CC_MASTER_BRIGHTNESS, sysex_data[3])
+            self._update_slider_from_sysex(CC_ANIMATION_SPEED, sysex_data[4])
+            self._update_slider_from_sysex(CC_ANIMATION_CTRL, sysex_data[5])
+            self._update_slider_from_sysex(CC_STROBE_RATE, sysex_data[6])
+            self._update_slider_from_sysex(CC_BLEND_MODE, sysex_data[7])
+            self._update_slider_from_sysex(CC_MIRROR_MODE, sysex_data[8])
+            self._update_slider_from_sysex(CC_DIRECTION, sysex_data[9])
+            self._update_slider_from_sysex(CC_ANIMATION_MODE, sysex_data[10])
+            
+            self._update_slider_from_sysex(CC_COLOR_A_HUE, sysex_data[11])
+            self._update_slider_from_sysex(CC_COLOR_A_SATURATION, sysex_data[12])
+            self._update_slider_from_sysex(CC_COLOR_A_VALUE, sysex_data[13])
+            self._update_slider_from_sysex(CC_COLOR_A_WHITE, sysex_data[14])
+            
+            self._update_slider_from_sysex(CC_COLOR_B_HUE, sysex_data[15])
+            self._update_slider_from_sysex(CC_COLOR_B_SATURATION, sysex_data[16])
+            self._update_slider_from_sysex(CC_COLOR_B_VALUE, sysex_data[17])
+            self._update_slider_from_sysex(CC_COLOR_B_WHITE, sysex_data[18])
+            
+            # Update active scene indicator
+            scene = sysex_data[19] if len(sysex_data) > 19 else 127
+            self._update_active_scene(scene if scene < MAX_SCENES else -1)
+    
+    def _update_slider_from_sysex(self, cc_number, value):
+        """Update a slider from SysEx data (value is 0-127)"""
+        slider_id = f"cc_{cc_number}_slider"
+        if dpg.does_item_exist(slider_id):
+            dpg.set_value(slider_id, value)
+        
+        # Also update combo boxes for mode/mirror/direction
+        if cc_number == CC_ANIMATION_MODE:
+            self._update_combo_from_value("anim_mode_combo", ANIMATION_MODES, value)
+        elif cc_number == CC_MIRROR_MODE:
+            self._update_combo_from_value("mirror_mode_combo", MIRROR_MODES, value)
+        elif cc_number == CC_DIRECTION:
+            self._update_combo_from_value("direction_mode_combo", DIRECTION_MODES, value)
+    
+    def _update_combo_from_value(self, combo_id, modes_list, value):
+        """Update a combo box selection based on CC value"""
+        if not dpg.does_item_exist(combo_id):
+            return
+        # Find closest matching mode
+        best_match = modes_list[0][0]
+        best_diff = 255
+        for name, mode_val in modes_list:
+            diff = abs(mode_val - value)
+            if diff < best_diff:
+                best_diff = diff
+                best_match = name
+        dpg.set_value(combo_id, best_match)
+    
+    def _update_active_scene(self, scene_index):
+        """Update the active scene indicator on buttons"""
+        self._active_scene = scene_index
+        # Update will be done by the global function if GUI exists
+        try:
+            for i in range(MAX_SCENES):
+                if dpg.does_item_exist(f"scene_btn_{i}"):
+                    if self.scene_save_mode:
+                        dpg.bind_item_theme(f"scene_btn_{i}", "save_mode_theme")
+                    elif i == scene_index:
+                        dpg.bind_item_theme(f"scene_btn_{i}", "active_scene_theme")
+                    else:
+                        dpg.bind_item_theme(f"scene_btn_{i}", 0)
+        except Exception:
+            pass  # GUI not ready yet
         
     def get_available_ports(self):
         """Get list of available MIDI output ports and serial ports"""
@@ -181,19 +301,36 @@ class LeslieLEDsController:
         # Close existing connections
         if self.midi_out and self.midi_out.is_port_open():
             self.midi_out.close_port()
+        if self.midi_device_in and self.midi_device_in.is_port_open():
+            self.midi_device_in.close_port()
         if self.serial_port and self.serial_port.is_open:
             self.serial_port.close()
             self.serial_port = None
         
         if port_type == "MIDI":
-            # Connect to USB MIDI port
+            # Connect to USB MIDI port (both output and input)
             if self.midi_out:
-                midi_ports = self.midi_out.get_ports()
-                if port_identifier in midi_ports:
-                    port_index = midi_ports.index(port_identifier)
+                midi_out_ports = self.midi_out.get_ports()
+                if port_identifier in midi_out_ports:
+                    port_index = midi_out_ports.index(port_identifier)
                     self.midi_out.open_port(port_index)
                     self.midi_port_name = port_identifier
                     self.is_serial_mode = False
+                    
+                    # Also open input port from the same device
+                    if self.midi_device_in:
+                        midi_in_ports = self.midi_device_in.get_ports()
+                        # Find matching input port (same device name)
+                        for i, in_port in enumerate(midi_in_ports):
+                            # Match by device name (e.g., "Midi2DMXnow")
+                            if "Midi2DMXnow" in in_port or port_identifier.split()[0] in in_port:
+                                self.midi_device_in.open_port(i)
+                                # Start device input thread
+                                if self.device_input_thread is None or not self.device_input_thread.is_alive():
+                                    self.device_input_thread = threading.Thread(
+                                        target=self._device_midi_loop, daemon=True)
+                                    self.device_input_thread.start()
+                                break
                     return True
         elif port_type == "SERIAL":
             # Connect to Serial MIDI port
@@ -445,13 +582,16 @@ def toggle_scene_save_mode(sender, app_data):
 
 
 def update_scene_button_colors():
-    """Update scene button colors based on save mode"""
+    """Update scene button colors based on save mode and active scene"""
     for i in range(20):
         if controller.scene_save_mode:
             # Red color for save mode
             dpg.bind_item_theme(f"scene_btn_{i}", "save_mode_theme")
+        elif i == controller._active_scene:
+            # Green for active scene
+            dpg.bind_item_theme(f"scene_btn_{i}", "active_scene_theme")
         else:
-            # Unbind theme to use default
+            # Default theme
             dpg.bind_item_theme(f"scene_btn_{i}", 0)
 
 
@@ -465,6 +605,13 @@ def create_gui():
             dpg.add_theme_color(dpg.mvThemeCol_Button, (180, 40, 40, 255))
             dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (220, 60, 60, 255))
             dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (150, 30, 30, 255))
+    
+    # Create theme for active scene (green buttons)
+    with dpg.theme(tag="active_scene_theme"):
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (40, 140, 40, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (60, 180, 60, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (30, 110, 30, 255))
     
     # Main window
     with dpg.window(label="LeslieLEDs Controller", tag="main_window"):

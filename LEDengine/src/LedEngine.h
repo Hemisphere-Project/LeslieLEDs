@@ -96,6 +96,8 @@ struct LedEngineState {
     DirectionMode direction = DIR_FORWARD;
     ColorRGBW colorA;
     ColorRGBW colorB;
+    uint8_t colorA_hue = 0;   // For rainbow animation hue range
+    uint8_t colorB_hue = 255; // For rainbow animation hue range
 };
 
 class LedEngine {

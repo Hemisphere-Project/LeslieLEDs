@@ -54,6 +54,7 @@ void DMXToLedEngine::applyDMXFrame(const uint8_t* dmxData, uint16_t size) {
     _colorA_W = dmxData[DMX_CH_COLOR_A_WHITE];
 
     _state.colorA.fromHSV(_colorA_H, _colorA_S, _colorA_V, _colorA_W);
+    _state.colorA_hue = _colorA_H;  // Store hue for rainbow animation
 
     _colorB_H = dmxData[DMX_CH_COLOR_B_HUE];
     _colorB_S = dmxData[DMX_CH_COLOR_B_SATURATION];
@@ -61,6 +62,7 @@ void DMXToLedEngine::applyDMXFrame(const uint8_t* dmxData, uint16_t size) {
     _colorB_W = dmxData[DMX_CH_COLOR_B_WHITE];
 
     _state.colorB.fromHSV(_colorB_H, _colorB_S, _colorB_V, _colorB_W);
+    _state.colorB_hue = _colorB_H;  // Store hue for rainbow animation
 
     _hasState = true;
 }
