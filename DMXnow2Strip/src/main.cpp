@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <Preferences.h>
+#include <WiFi.h>
+#include <esp_mac.h>
+#include <esp_now.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <ESPNowDMX.h>
@@ -92,6 +95,55 @@ static void wdtSetup() {
     esp_task_wdt_reset();
 }
 
+// --- Heartbeat emitter ------------------------------------------------
+// Sends a HeartbeatPacket to the broadcast address once per
+// LESLIE_HEARTBEAT_PERIOD_MS. Sender (Midi2DMXnow) collects them so the
+// operator sees per-node health on the master screen without USB.
+// Other slaves see the packet too but their ESPNowDMX receiver drops
+// anything that isn't PACKET_TYPE_DATA_CHUNK, so it's free.
+static const uint8_t kBroadcastAddr[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+static uint8_t g_nid[3] = {0, 0, 0};
+static uint32_t g_lastHeartbeatSent = 0;
+static esp_reset_reason_t g_lastResetReason = ESP_RST_UNKNOWN;
+
+static void initNodeId() {
+    uint8_t mac[6] = {0};
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+        g_nid[0] = mac[3];
+        g_nid[1] = mac[4];
+        g_nid[2] = mac[5];
+    }
+}
+
+static void sendHeartbeatIfDue(uint32_t now) {
+    if (now - g_lastHeartbeatSent < LESLIE_HEARTBEAT_PERIOD_MS) return;
+    g_lastHeartbeatSent = now;
+
+    HeartbeatPacket pkt{};
+    pkt.type = PACKET_TYPE_HEARTBEAT;
+    pkt.version = LESLIE_HEARTBEAT_VERSION;
+    pkt.nid[0] = g_nid[0];
+    pkt.nid[1] = g_nid[1];
+    pkt.nid[2] = g_nid[2];
+    pkt.lastResetReason = (uint8_t)g_lastResetReason;
+    pkt.uptimeSec = now / 1000;
+    pkt.freeHeap = ESP.getFreeHeap();
+    pkt.msSinceLastFrame = (lastDMXFrame == 0)
+        ? UINT32_MAX
+        : (uint32_t)(now - lastDMXFrame);
+    // Skip cached FPS lookup if ledEngine isn't up yet (shouldn't happen
+    // post-setup, but be defensive).
+    extern LedEngine* ledEngine;
+    pkt.fps = ledEngine ? ledEngine->getFPS() : 0;
+
+    // esp_now_send return value is ignored on purpose: we don't want
+    // heartbeat send failures to bump the ESPNowDMX_Sender error
+    // counters (slaves don't have the sender wired). A dropped HB
+    // just means one missed sample on the operator's grid.
+    (void)esp_now_send(kBroadcastAddr, reinterpret_cast<const uint8_t*>(&pkt), sizeof(pkt));
+}
+// --- end heartbeat emitter -------------------------------------------
+
 // Mailbox between the Wi-Fi RX context and the main loop. The ESPNowDMX
 // receive callback runs inside the Wi-Fi task and must not do heavy work
 // (heatshrink decompression, full DMX channel decode, HSV->RGBW, etc.):
@@ -164,6 +216,7 @@ void setup() {
     // BEFORE anything that could itself hang or panic. If the bad cold-boot
     // scenario ever puts us in here under a non-POWERON reason, we'll know.
     esp_reset_reason_t lastReason = esp_reset_reason();
+    g_lastResetReason = lastReason;
     bootlog::record(lastReason);
 
     // Boot watchdog: gives the chip a self-reset path if any of the init
@@ -263,6 +316,11 @@ void setup() {
     
     espnowDMX.setReceiveCallback(onDMXFrameReceived);
 
+    // Pull the chip's WiFi MAC so heartbeats carry a stable per-node
+    // identifier. esp_read_mac is safe to call now that WiFi.mode(STA)
+    // has been set inside ESPNowMeshClock::begin().
+    initNodeId();
+
     // Setup complete — flip the beacon to green UNLESS we're still
     // flagging a brownout from the previous reset. The purple pattern
     // persists until the first DMX frame arrives, at which point the
@@ -335,6 +393,9 @@ void loop() {
             }
         }
     }
+
+    // Emit per-second heartbeat to the master (and ignored by other slaves).
+    sendHeartbeatIfDue(now);
 
     // Check DMX connection timeout
     if (dmxConnected && (now - lastDMXFrame > DMX_TIMEOUT)) {

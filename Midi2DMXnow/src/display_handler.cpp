@@ -3,6 +3,7 @@
 DisplayHandler::DisplayHandler()
     : _ledEngine(nullptr)
     , _dmxState(nullptr)
+    , _heartbeats(nullptr)
     , _lastUpdate(0)
     , _sceneNotificationEnd(0)
     , _sceneNotificationNumber(0)
@@ -93,13 +94,50 @@ void DisplayHandler::handleButtonPress() {
 void DisplayHandler::drawPreview() {
 #if DISPLAY_ENABLED
     if (!_ledEngine) return;
-    
+
     _previewRenderer.draw(M5.Display, _ledEngine, _needsFullRedraw);
-    
+
     // Draw scene indicator on top of preview
     drawSceneIndicator();
-    
+
+    // Rig health dot row (slaves heard recently, one coloured dot each)
+    drawHeartbeatDots();
+
     _needsFullRedraw = false;
+#endif
+}
+
+void DisplayHandler::drawHeartbeatDots() {
+#if DISPLAY_ENABLED
+    if (!_heartbeats) return;
+
+    // Position: top edge, just under the "LED Preview" title,
+    // right-aligned to leave room for the scene indicator on the
+    // far right. Each slot is an 8x4 strip — small enough that 8
+    // of them fit easily on 128 px.
+    const int16_t w = M5.Display.width();
+    const int16_t y = 2;
+    const int16_t dotW = 8;
+    const int16_t dotH = 4;
+    const int16_t gap = 2;
+    const int16_t rowW = HeartbeatCollector::MAX_SLAVES * (dotW + gap);
+    int16_t x = w - 32 - rowW; // leave 32 px for the scene tag
+
+    uint32_t now = millis();
+    const auto* slots = _heartbeats->slots();
+    for (uint8_t i = 0; i < HeartbeatCollector::MAX_SLAVES; i++) {
+        HeartbeatCollector::Status st = _heartbeats->statusOf(slots[i], now);
+        uint16_t colour;
+        switch (st) {
+            case HeartbeatCollector::OK:    colour = M5.Display.color565(0,   200, 0);   break;
+            case HeartbeatCollector::STALE: colour = M5.Display.color565(220, 180, 0);   break;
+            case HeartbeatCollector::LOST:  colour = M5.Display.color565(220, 30,  30);  break;
+            case HeartbeatCollector::EMPTY:
+            default:                        colour = M5.Display.color565(40,  40,  40);  break;
+        }
+        M5.Display.fillRect(x, y, dotW, dotH, colour);
+        x += dotW + gap;
+    }
 #endif
 }
 

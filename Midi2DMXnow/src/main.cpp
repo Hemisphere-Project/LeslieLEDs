@@ -10,6 +10,7 @@
 #include "dmx_state.h"
 #include "dmx_output.h"
 #include "display_handler.h"
+#include "heartbeat_collector.h"
 
 // Platform-specific MIDI handler
 #if MIDI_VIA_SERIAL
@@ -30,6 +31,21 @@ ESPNowDMX espnowDMX;
 ESPNowMeshClock meshClock;
 DisplayHandler displayHandler;
 PhysicalDMXOutput physicalDMX;
+HeartbeatCollector heartbeats;
+
+// Dispatcher used as MeshClock's userCallback (replaces the older
+// ESPNowDMX::forwardPacket on the sender side). The sender has no
+// active ESPNowDMX receiver — it's the source of DMX — so we route by
+// packet type: heartbeat packets feed the rig-health collector,
+// everything else is dropped silently.
+static void onRadioPacket(const uint8_t* mac, const uint8_t* data, int len) {
+    (void)mac;
+    if (len < 1) return;
+    if (data[0] == PACKET_TYPE_HEARTBEAT) {
+        heartbeats.ingest(data, len, millis());
+    }
+    // PACKET_TYPE_DATA_CHUNK from another sender, unknown types: drop.
+}
 
 // LED monitoring strip
 LedEngineConfig ledConfig;
@@ -169,6 +185,7 @@ void setup() {
   esp_task_wdt_reset();
   displayHandler.setLedEngine(ledEngine);
   displayHandler.setDMXState(&dmxState);
+  displayHandler.setHeartbeats(&heartbeats);
   
   // Initialize MIDI
   midiHandler.begin();
@@ -176,8 +193,9 @@ void setup() {
   midiHandler.setDMXState(&dmxState);
   midiHandler.setDisplayHandler(&displayHandler);
   
-  // Initialize MeshClock so it owns the ESP-NOW driver and forwards non-clock packets
-  meshClock.setUserCallback(ESPNowDMX::forwardPacket);
+  // Initialize MeshClock so it owns the ESP-NOW driver and forwards
+  // non-clock packets to our dispatcher (heartbeat collector + DMX drop).
+  meshClock.setUserCallback(onRadioPacket);
   meshClock.begin(true);
 
   // Initialize ESPNow DMX sender (reuse MeshClock's ESP-NOW stack)
@@ -228,7 +246,10 @@ void loop() {
 
   // Update MeshClock timing
   meshClock.loop();
-  
+
+  // Age out stale heartbeats so the dot row reflects current state.
+  heartbeats.prune(millis());
+
   // Handle MIDI input
   midiHandler.update();
   
