@@ -163,7 +163,8 @@ void setup() {
     // Record why we last restarted (PowerOn / Brownout / TaskWDT / Panic / ...)
     // BEFORE anything that could itself hang or panic. If the bad cold-boot
     // scenario ever puts us in here under a non-POWERON reason, we'll know.
-    bootlog::record(esp_reset_reason());
+    esp_reset_reason_t lastReason = esp_reset_reason();
+    bootlog::record(lastReason);
 
     // Boot watchdog: gives the chip a self-reset path if any of the init
     // steps below ever hangs (Wi-Fi bringup, RMT alloc, etc.). Does not
@@ -172,9 +173,14 @@ void setup() {
     wdtSetup();
 
     // Onboard LED beacon: RED solid the moment setup() starts so you can
-    // see across the room which units made it past power-up.
+    // see across the room which units made it past power-up. If we just
+    // came back from a brownout, flash purple instead to flag it.
     beacon.begin(LED_BUILTIN);
-    beacon.setState(BootBeacon::BOOT);
+    if (lastReason == ESP_RST_BROWNOUT) {
+        beacon.setState(BootBeacon::BROWNOUT);
+    } else {
+        beacon.setState(BootBeacon::BOOT);
+    }
 
     // Boot delay - let power rails and WiFi radio stabilize after cold boot
     delay(500);
@@ -185,7 +191,7 @@ void setup() {
     cfg.clear_display = true;
     cfg.output_power = true;
     M5.begin(cfg);
-    
+
     // Initialize serial for debugging
     #if DEBUG_MODE
         Serial.begin(SERIAL_BAUD_RATE);
@@ -194,6 +200,7 @@ void setup() {
         Serial.printf("Platform: %s\n", PLATFORM_NAME);
         Serial.printf("LED Count: %d\n", LED_COUNT);
         Serial.printf("LED_DATA_PIN: GPIO %d\n", LED_DATA_PIN);
+        Serial.printf("Last reset reason: %d\n", (int)lastReason);
     #endif
 
     // Initialize LED engine
@@ -202,10 +209,16 @@ void setup() {
     ledConfig.targetFPS = LED_TARGET_FPS;
     ledConfig.defaultBrightness = LED_BRIGHTNESS;
     ledConfig.enableRGBW = true;
-    
+
     ledEngine = new LedEngine(ledConfig);
     ledEngine->begin();
-    playBootRGBWTest();
+    // Skip the bright RGBW sweep if we just browned out: lighting 120
+    // SK6812s at full white draws ~7 A, which is exactly the kind of
+    // spike that would re-trigger the brownout in a loop. The purple
+    // beacon flag from above already tells the operator what happened.
+    if (lastReason != ESP_RST_BROWNOUT) {
+        playBootRGBWTest();
+    }
     esp_task_wdt_reset();
 
     // Initialize DMX adapter
@@ -250,8 +263,13 @@ void setup() {
     
     espnowDMX.setReceiveCallback(onDMXFrameReceived);
 
-    // Setup complete — flip the beacon to green.
-    beacon.setState(BootBeacon::READY);
+    // Setup complete — flip the beacon to green UNLESS we're still
+    // flagging a brownout from the previous reset. The purple pattern
+    // persists until the first DMX frame arrives, at which point the
+    // mailbox-drain path in loop() will flip it to READY.
+    if (lastReason != ESP_RST_BROWNOUT) {
+        beacon.setState(BootBeacon::READY);
+    }
     lastRadioActivity = millis();
 
     #if DEBUG_MODE

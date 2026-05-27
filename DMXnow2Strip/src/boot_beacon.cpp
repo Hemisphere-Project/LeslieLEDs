@@ -24,19 +24,32 @@ void BootBeacon::setState(State s) {
     _lastBlink = millis();
     _blinkOn = true;
     switch (s) {
-        case BOOT:  writeColor(80, 0, 0);  break;  // dim red
-        case READY: writeColor(0, 60, 0);  break;  // dim green
-        case LOST:  writeColor(200, 0, 0); break;  // bright red, blinker takes over from here
-        case OFF:   writeColor(0, 0, 0);   break;
+        case BOOT:     writeColor(80, 0, 0);   break;  // dim red
+        case READY:    writeColor(0, 60, 0);   break;  // dim green
+        case LOST:     writeColor(200, 0, 0);  break;  // bright red, blinker takes over
+        case BROWNOUT: writeColor(120, 0, 120); break; // purple, blinker takes over
+        case OFF:      writeColor(0, 0, 0);    break;
     }
 }
 
 void BootBeacon::tick(uint32_t now) {
-    if (_state != LOST) return;
-    if (now - _lastBlink < 500) return;
-    _blinkOn = !_blinkOn;
-    _lastBlink = now;
-    writeColor(_blinkOn ? 200 : 0, 0, 0);
+    switch (_state) {
+        case LOST:
+            if (now - _lastBlink < 500) return;
+            _blinkOn = !_blinkOn;
+            _lastBlink = now;
+            writeColor(_blinkOn ? 200 : 0, 0, 0);
+            break;
+        case BROWNOUT:
+            // Slow purple breathing so it's distinguishable from LOST.
+            if (now - _lastBlink < 800) return;
+            _blinkOn = !_blinkOn;
+            _lastBlink = now;
+            writeColor(_blinkOn ? 120 : 20, 0, _blinkOn ? 120 : 20);
+            break;
+        default:
+            break;
+    }
 }
 
 void BootBeacon::writeColor(uint8_t r, uint8_t g, uint8_t b) {

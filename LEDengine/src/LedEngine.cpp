@@ -7,6 +7,7 @@
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <esp_random.h>
+#include <esp_task_wdt.h>
 #endif
 
 namespace LedEngineLib {
@@ -310,8 +311,20 @@ void LedEngine::renderTaskTrampoline(void* param) {
 
 void LedEngine::renderTaskLoop() {
 #if defined(ARDUINO_ARCH_ESP32)
+    // Subscribe the render task to the same Task WDT the main loop uses.
+    // If the render task ever deadlocks (mutex held forever, RMT driver
+    // wedge, anything that stops serviceRenderTick from completing), the
+    // chip self-resets instead of leaving the strip stuck on the last
+    // frame with no operator-visible indication. Returning ESP_ERR_INVALID_STATE
+    // here means the project hasn't configured a Task WDT yet — in that
+    // case we silently skip subscription.
+    bool wdtSubscribed = (esp_task_wdt_add(nullptr) == ESP_OK);
+
     TickType_t lastWake = xTaskGetTickCount();
     while (true) {
+        if (wdtSubscribed) {
+            esp_task_wdt_reset();
+        }
         serviceRenderTick();
         uint32_t intervalMs = _frameIntervalMs == 0 ? 16 : _frameIntervalMs;
         TickType_t frameTicks = pdMS_TO_TICKS(intervalMs);
@@ -480,8 +493,13 @@ const CRGB* LedEngine::getPreviewPixels() const {
     }
 
 #if defined(ARDUINO_ARCH_ESP32)
+    // Bounded wait: the render task can hold _bufferMutex for the full
+    // RMT transmission window (~4 ms for 120 SK6812). If the display
+    // poller blocked forever here it would starve button + MIDI updates
+    // for that long. Caller (display) just shows the last preview frame
+    // on contention.
     if (_bufferMutex) {
-        if (xSemaphoreTake(_bufferMutex, portMAX_DELAY) != pdTRUE) {
+        if (xSemaphoreTake(_bufferMutex, pdMS_TO_TICKS(5)) != pdTRUE) {
             return nullptr;
         }
     }

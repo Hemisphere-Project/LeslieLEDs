@@ -11,9 +11,10 @@
 class BootBeacon {
 public:
     enum State {
-        BOOT,   // dim red solid — chip is awake, setup() still running
-        READY,  // dim green solid — DMX link healthy
-        LOST,   // red slow blink — no DMX frame received for a while
+        BOOT,      // dim red solid — chip is awake, setup() still running
+        READY,     // dim green solid — DMX link healthy
+        LOST,      // red slow blink — no DMX frame received for a while
+        BROWNOUT,  // magenta/purple blink — last reset was a brownout; check power
         OFF
     };
 
