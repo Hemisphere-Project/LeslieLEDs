@@ -29,12 +29,17 @@ bool dmxConnected = false;
 unsigned long lastDMXFrame = 0;
 const uint32_t DMX_TIMEOUT = 3000;
 
-// Self-heal: if no DMX frame has been seen for this long AND MeshClock
-// reports LOST, restart the chip. Pure recovery — if the Wi-Fi stack
-// quietly dies, the box restarts itself rather than going dark until
-// someone power-cycles it. Cold-boot freezes are NOT addressed by this
-// (those need a physical RESET / hardware POR fix).
+// Self-heal timers:
+//   RADIO_SILENCE_RESTART_MS – no clock OR DMX from any radio source for
+//     this long → the Wi-Fi stack itself is probably wedged. Restart.
+//   NO_DMX_RESTART_MS – MeshClock is synced (clock packets are arriving)
+//     but no DMX frame has been applied for this long → the ESPNowDMX
+//     receive path is wedged while the radio is otherwise fine. Restart.
+// Both timers are needed because the radio-silence check is gated on
+// *any* radio activity (including clock packets), so it never fires when
+// only the DMX receive path is stuck.
 const uint32_t RADIO_SILENCE_RESTART_MS = 10000;
+const uint32_t NO_DMX_RESTART_MS        = 30000;
 unsigned long lastRadioActivity = 0;
 
 // Task WDT timeout. Generous enough to cover the RGBW boot sweep
@@ -418,6 +423,20 @@ void loop() {
     if (now - lastRadioActivity > RADIO_SILENCE_RESTART_MS) {
         #if DEBUG_MODE
             Serial.println("[RADIO] No activity for >10s — restarting");
+            Serial.flush();
+        #endif
+        delay(50);
+        ESP.restart();
+    }
+
+    // DMX-receive-path self-heal: if MeshClock is synced (clock packets
+    // are arriving, so the radio is alive) but no DMX frame has been
+    // applied for 30 s, the ESPNowDMX receiver is wedged. Reboot.
+    if (lastDMXFrame > 0 &&
+        meshClock.getSyncState() == SyncState::SYNCED &&
+        (now - lastDMXFrame) > NO_DMX_RESTART_MS) {
+        #if DEBUG_MODE
+            Serial.println("[DMX] Synced but no DMX for >30s — restarting");
             Serial.flush();
         #endif
         delay(50);

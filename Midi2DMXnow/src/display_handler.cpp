@@ -124,16 +124,16 @@ void DisplayHandler::drawHeartbeatDots() {
     int16_t x = w - 32 - rowW; // leave 32 px for the scene tag
 
     uint32_t now = millis();
-    const auto* slots = _heartbeats->slots();
     for (uint8_t i = 0; i < HeartbeatCollector::MAX_SLAVES; i++) {
-        HeartbeatCollector::Status st = _heartbeats->statusOf(slots[i], now);
+        HeartbeatCollector::Status st = _heartbeats->statusOf(i, now);
         uint16_t colour;
         switch (st) {
-            case HeartbeatCollector::OK:    colour = M5.Display.color565(0,   200, 0);   break;
-            case HeartbeatCollector::STALE: colour = M5.Display.color565(220, 180, 0);   break;
-            case HeartbeatCollector::LOST:  colour = M5.Display.color565(220, 30,  30);  break;
+            case HeartbeatCollector::OK:     colour = M5.Display.color565(0,   200, 0);   break;
+            case HeartbeatCollector::NO_DMX: colour = M5.Display.color565(220, 120, 0);   break;
+            case HeartbeatCollector::STALE:  colour = M5.Display.color565(220, 180, 0);   break;
+            case HeartbeatCollector::LOST:   colour = M5.Display.color565(220, 30,  30);  break;
             case HeartbeatCollector::EMPTY:
-            default:                        colour = M5.Display.color565(40,  40,  40);  break;
+            default:                         colour = M5.Display.color565(40,  40,  40);  break;
         }
         M5.Display.fillRect(x, y, dotW, dotH, colour);
         x += dotW + gap;

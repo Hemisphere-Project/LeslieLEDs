@@ -82,7 +82,8 @@ void MIDIHandler::sendRigHealthSysEx() {
     // Per-slot payload: nid[0..2] (masked to 7 bits), status (0-3),
     // fps (0-127), resetReason (0-127).  6 bytes × 8 slots max = 48 bytes.
     // Full message: F0 7D 02 <count> [slots...] F7
-    const auto* slots = _heartbeats->slots();
+    HeartbeatCollector::Slot slots[HeartbeatCollector::MAX_SLAVES];
+    _heartbeats->copySlots(slots);  // thread-safe snapshot
     const uint32_t now = millis();
 
     uint8_t buf[4 + HeartbeatCollector::MAX_SLAVES * 6 + 1];
@@ -98,7 +99,7 @@ void MIDIHandler::sendRigHealthSysEx() {
         p[0] = s.nid[0] & 0x7F;
         p[1] = s.nid[1] & 0x7F;
         p[2] = s.nid[2] & 0x7F;
-        p[3] = static_cast<uint8_t>(_heartbeats->statusOf(s, now));  // 0-3
+        p[3] = static_cast<uint8_t>(_heartbeats->statusOf(i, now));
         p[4] = s.last.fps & 0x7F;
         p[5] = s.last.lastResetReason & 0x7F;
         p += 6;
