@@ -1,6 +1,10 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+// Shared wire-protocol constants (DMX universe + channel layout +
+// LED_COUNT default). Must match the receiver firmware byte-for-byte.
+#include <leslie_protocol.h>
+
 // ========================================
 // Platform Detection & Configuration
 // ========================================
@@ -20,10 +24,6 @@
     #endif
 #else
     #error "Platform not defined! Use -DPLATFORM_ATOMS3 or -DPLATFORM_M5CORE"
-#endif
-
-#ifndef LED_COUNT
-    #define LED_COUNT 120
 #endif
 
 // ========================================
@@ -90,36 +90,8 @@
 #define NOTE_SCENE_19 54
 #define NOTE_SCENE_20 55
 
-// ========================================
-// DMX Configuration
-// ========================================
-#define DMX_UNIVERSE_SIZE 512
-#define DMX_START_ADDRESS 1
-#ifndef DMX_UNIVERSE_ID
-#define DMX_UNIVERSE_ID 0
-#endif
-
-// DMX Channel Layout (32 channels total)
-#define DMX_CH_MASTER_BRIGHTNESS 0    // 0-255
-#define DMX_CH_ANIMATION_MODE 1       // 0-255 (0-25 per mode)
-#define DMX_CH_ANIMATION_SPEED 2      // 0-255
-#define DMX_CH_ANIMATION_CTRL 3       // 0-255
-#define DMX_CH_STROBE_RATE 4          // 0-255
-#define DMX_CH_BLEND_MODE 5           // 0-255
-#define DMX_CH_MIRROR_MODE 6          // 0-255
-#define DMX_CH_DIRECTION 7            // 0-255
-
-#define DMX_CH_COLOR_A_HUE 8          // 0-255
-#define DMX_CH_COLOR_A_SATURATION 9   // 0-255
-#define DMX_CH_COLOR_A_VALUE 10       // 0-255
-#define DMX_CH_COLOR_A_WHITE 11       // 0-255
-
-#define DMX_CH_COLOR_B_HUE 12         // 0-255
-#define DMX_CH_COLOR_B_SATURATION 13  // 0-255
-#define DMX_CH_COLOR_B_VALUE 14       // 0-255
-#define DMX_CH_COLOR_B_WHITE 15       // 0-255
-
-// Channels 16-31 reserved for future use
+// DMX universe size + channel layout are defined in leslie_protocol.h
+// (shared with the receiver firmware).
 
 // ========================================
 // Physical DMX Output Configuration
@@ -148,7 +120,6 @@
 #define DISPLAY_ENABLED true
 #define DISPLAY_BRIGHTNESS 128
 #define DISPLAY_UPDATE_MS 50
-#define MIDI_LOG_LINES 8
 
 // Display colors (RGB565 format)
 #define COLOR_BG 0x0000

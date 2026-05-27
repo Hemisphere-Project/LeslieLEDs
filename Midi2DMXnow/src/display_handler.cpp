@@ -3,7 +3,6 @@
 DisplayHandler::DisplayHandler()
     : _ledEngine(nullptr)
     , _dmxState(nullptr)
-    , _logIndex(0)
     , _lastUpdate(0)
     , _sceneNotificationEnd(0)
     , _sceneNotificationNumber(0)
@@ -11,10 +10,6 @@ DisplayHandler::DisplayHandler()
     , _needsFullRedraw(true)
     , _currentScene(-1)
     , _lastPreviewUpdate(0) {
-    for (int i = 0; i < MIDI_LOG_LINES; i++) {
-        _logEntries[i].text[0] = '\0';
-        _logEntries[i].timestamp = 0;
-    }
 }
 
 void DisplayHandler::begin() {
@@ -62,14 +57,10 @@ void DisplayHandler::update() {
 }
 
 void DisplayHandler::logMessage(const char* message) {
-    // Keep log internally for debug purposes
-    strncpy(_logEntries[_logIndex].text, message, 31);
-    _logEntries[_logIndex].text[31] = '\0';
-    _logEntries[_logIndex].timestamp = millis();
-    _logIndex = (_logIndex + 1) % MIDI_LOG_LINES;
-    
 #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
     Serial.printf("[LOG] %s\n", message);
+#else
+    (void)message;
 #endif
 }
 

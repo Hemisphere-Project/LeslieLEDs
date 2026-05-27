@@ -43,7 +43,7 @@ All transports expect **MIDI channel 1**. If your controller only transmits on a
 | 5  | 5 | Blend mode | 0–127 | 0 = hard split, 127 = smooth gradient. |
 | 6  | 6 | Mirror mode | 0 None, 38 Full, 63 Split2, 88 Split3, 114 Split4 | Matches GUI dropdown. |
 | 7  | 7 | Direction | 12 Forward, 38 Backward, 63 PingPong, 88 Random | Map to switches for live play. |
-| 8  | 1 | Animation mode | Groups of 10 values pick each of the 8 modes (0–9 Solid, 10–19 Dual, …). |
+| 8  | 1 | Animation mode | The firmware maps `value * 10 / 128` (rounded) to the 10 animation modes: 0–12 Solid, 13–25 DualSolid, 26–38 Chase, 39–51 Dash, 52–64 Waveform, 65–76 Pulse, 77–89 Rainbow, 90–102 Sparkle, 103–115 Custom1, 116–127 Custom2. Aim for the middle of each band when mapping a hardware fader. |
 | 20 | 8 | Color A Hue | 0–127 | Wraps full spectrum. |
 | 21 | 9 | Color A Saturation | 0–127 | 0 = white, 127 = vivid. |
 | 22 | 10 | Color A Value | 0–127 | Works alongside master brightness. |
@@ -58,29 +58,23 @@ All transports expect **MIDI channel 1**. If your controller only transmits on a
 
 ## 4. Note assignments
 
-| Note (C=36) | Function |
-|-------------|----------|
-| 36 (C2) | Scene 1 load/save |
-| 37 (C#2) | Scene 2 |
-| 38 (D2) | Scene 3 |
-| 39 (D#2) | Scene 4 |
-| 40 (E2) | Scene 5 |
-| 41 (F2) | Scene 6 |
-| 42 (F#2) | Scene 7 |
-| 43 (G2) | Scene 8 |
-| 44 (G#2) | Scene 9 |
-| 45 (A2) | Scene 10 |
-| 48 (C3) | Blackout (momentary, 127 velocity recommended) |
+Twenty scene slots map to MIDI notes 36–55 (C2 through D#3). Note 36 = scene 1, note 55 = scene 20.
+
+| Note range | Function |
+|------------|----------|
+| 36 (C2) – 55 (D#3) | Scene 1–20 load/save. Hold = light on. **Release = blackout** (note-off blanks brightness). |
 
 Workflow:
-1. Set up a look, raise CC127 above 64.
-2. Hit the scene note you want to store. The sender’s display and the controller app both flash a save banner.
+1. Set up a look, raise CC127 above 64 (scene save mode armed).
+2. Hit the scene note you want to store. The sender's display and the controller app both flash a save banner.
 3. Drop CC127 back to 0 to go back to recall mode.
+4. To use a scene as a momentary stab: just hold the note as long as you want it lit; release to drop to black.
 
 ## 5. Controller app tips
 
-- Launch from repo root: `./controller/run.sh` (uses `uv` to create `.venv` if missing).
-- The **Output Port** combo lists USB MIDI devices plus any `/dev/tty.*` serial adapters:
+- **GUI mode** – `./controller/run.sh` (uses `uv` to create `.venv` if missing). Sliders, scene buttons, port picker.
+- **Headless mode** – `./controller/run.sh --headless` (optionally `--port <substring>`). No DearPyGUI, no display dependency, just the virtual MIDI bridge. Use this on production rigs driven from a DAW where the GUI would only get in the way.
+- The **Output Port** combo (GUI) lists USB MIDI devices plus any `/dev/tty.*` serial adapters:
   - Labels containing `LeslieLEDs`, `M5Stack`, or `USB Single Serial` auto-select on refresh.
   - Switch between USB and serial instantly; the app forwards the virtual MIDI port to whichever path is active.
 - The virtual input is always named **LeslieCTRLs**. Route your DAW track to that port to keep the GUI in sync with automation while still hitting the hardware.
@@ -93,7 +87,7 @@ Workflow:
 - **Velocity and scaling** – Keep CC automation between 0–120 to leave a little headroom for smoothing; the firmware clamps values anyway, but this prevents hard edges when mapping faders.
 - **Scenes per song** – Dedicate one MIDI clip lane per song section with the desired scene number plus any CC sweeps.
 - **Latency compensation** – ESP-NOW adds under 20 ms; if your DAW lets you offset a track by -20 ms you can align cues with audio transients perfectly.
-- **Failover** – If the receivers miss frames for more than 3 seconds they freeze on the last state. Send any CC to refresh once the link is back.
+- **Failover** – The sender re-broadcasts the full universe every 200 ms, so a momentarily dropped delta packet self-heals in ≤200 ms even if the DAW keeps streaming CCs. If a slave hears nothing for >10 s it reboots itself; the onboard LED on Atom Lite slaves goes to a slow red blink before the reboot so you can spot the offender.
 
 ## 7. Troubleshooting quick hits
 

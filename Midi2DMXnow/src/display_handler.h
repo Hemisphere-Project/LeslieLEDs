@@ -30,14 +30,6 @@ private:
     LedEngineLib::LedEngine* _ledEngine;
     DMXState* _dmxState;
 
-    struct LogEntry {
-        char text[32];
-        unsigned long timestamp;
-    };
-
-    LogEntry _logEntries[MIDI_LOG_LINES];
-    int _logIndex;
-
     unsigned long _lastUpdate;
     unsigned long _sceneNotificationEnd;
     uint8_t _sceneNotificationNumber;
