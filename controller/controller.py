@@ -32,12 +32,19 @@ SYSEX_MSG_STATE_DUMP  = 0x01  # Full state dump message
 SYSEX_MSG_RIG_HEALTH  = 0x02  # Slave heartbeat table (2 s interval)
 
 # HeartbeatCollector::Status enum (must match heartbeat_collector.h)
-SLOT_EMPTY = 0
-SLOT_OK    = 1
-SLOT_STALE = 2
-SLOT_LOST  = 3
+SLOT_EMPTY  = 0
+SLOT_OK     = 1
+SLOT_NO_DMX = 2
+SLOT_STALE  = 3
+SLOT_LOST   = 4
 
-_STATUS_LABEL = {SLOT_EMPTY: "EMPTY", SLOT_OK: "OK   ", SLOT_STALE: "STALE", SLOT_LOST: "LOST "}
+_STATUS_LABEL = {
+    SLOT_EMPTY: "EMPTY",
+    SLOT_OK: "OK   ",
+    SLOT_NO_DMX: "NO DMX",
+    SLOT_STALE: "STALE",
+    SLOT_LOST: "LOST ",
+}
 
 # ESP reset reason codes (esp_reset_reason_t)
 _RESET_REASON = {
@@ -294,10 +301,11 @@ class LeslieLEDsController:
         if self.headless or dpg is None:
             return
         color_map = {
-            SLOT_OK:    (0,   200,  0,   255),
-            SLOT_STALE: (220, 180,  0,   255),
-            SLOT_LOST:  (220,  50,  50,  255),
-            SLOT_EMPTY: (80,   80,  80,  150),
+            SLOT_OK:     (0,   200,   0, 255),
+            SLOT_NO_DMX: (220, 120,   0, 255),
+            SLOT_STALE:  (220, 180,   0, 255),
+            SLOT_LOST:   (220,  50,  50, 255),
+            SLOT_EMPTY:  (80,   80,  80, 150),
         }
         for i in range(8):
             tag = f"hb_dot_{i}"

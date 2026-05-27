@@ -41,6 +41,7 @@ const uint32_t DMX_TIMEOUT = 3000;
 const uint32_t RADIO_SILENCE_RESTART_MS = 10000;
 const uint32_t NO_DMX_RESTART_MS        = 30000;
 unsigned long lastRadioActivity = 0;
+unsigned long noDMXWatchdogSince = 0;
 
 // Task WDT timeout. Generous enough to cover the RGBW boot sweep
 // (~600 ms) plus the ESPNowDMX init retries (up to ~600 ms) plus a
@@ -371,13 +372,26 @@ void loop() {
 
     M5.update();
     uint32_t now = millis();
+    SyncState syncState = meshClock.getSyncState();
 
     // Update MeshClock (synchronize time)
     meshClock.loop();
 
+    syncState = meshClock.getSyncState();
+
+    // Once we've synced to the mesh at least once, start a watchdog for
+    // the DMX receive path even if the first DMX frame never arrives.
+    if (syncState == SyncState::SYNCED) {
+        if (noDMXWatchdogSince == 0) {
+            noDMXWatchdogSince = now;
+        }
+    } else {
+        noDMXWatchdogSince = 0;
+    }
+
     // Track any sign of life from the radio: either a DMX frame or a clock
     // packet. Used by the radio-silence self-heal below.
-    if (g_pendingFrame || meshClock.getSyncState() == SyncState::SYNCED) {
+    if (g_pendingFrame || syncState == SyncState::SYNCED) {
         lastRadioActivity = now;
     }
 
@@ -399,6 +413,7 @@ void loop() {
             dmxAdapter->applyDMXFrame(frameCopy, DMX_UNIVERSE_SIZE);
             dmxConnected = true;
             lastDMXFrame = rxMillis;
+            noDMXWatchdogSince = rxMillis;
             if (wasDisconnected) {
                 beacon.setState(BootBeacon::READY);
             }
@@ -432,9 +447,9 @@ void loop() {
     // DMX-receive-path self-heal: if MeshClock is synced (clock packets
     // are arriving, so the radio is alive) but no DMX frame has been
     // applied for 30 s, the ESPNowDMX receiver is wedged. Reboot.
-    if (lastDMXFrame > 0 &&
-        meshClock.getSyncState() == SyncState::SYNCED &&
-        (now - lastDMXFrame) > NO_DMX_RESTART_MS) {
+    if (noDMXWatchdogSince > 0 &&
+        syncState == SyncState::SYNCED &&
+        (now - noDMXWatchdogSince) > NO_DMX_RESTART_MS) {
         #if DEBUG_MODE
             Serial.println("[DMX] Synced but no DMX for >30s — restarting");
             Serial.flush();
@@ -455,16 +470,16 @@ void loop() {
         static unsigned long lastDebug = 0;
         if (millis() - lastDebug > 5000) {
             lastDebug = millis();
-            const char* syncState = "Unknown";
-            switch (meshClock.getSyncState()) {
-                case SyncState::ALONE: syncState = "Alone"; break;
-                case SyncState::SYNCED: syncState = "Synced"; break;
-                case SyncState::LOST: syncState = "Lost"; break;
+            const char* syncStateLabel = "Unknown";
+            switch (syncState) {
+                case SyncState::ALONE: syncStateLabel = "Alone"; break;
+                case SyncState::SYNCED: syncStateLabel = "Synced"; break;
+                case SyncState::LOST: syncStateLabel = "Lost"; break;
             }
             Serial.printf("DMX: %s, Clock: %lu ms, Sync: %s, FPS: %d\n",
                          dmxConnected ? "Connected" : "Waiting",
                          meshClock.meshMillis(),
-                         syncState,
+                         syncStateLabel,
                          ledEngine ? ledEngine->getFPS() : 0);
         }
     #endif

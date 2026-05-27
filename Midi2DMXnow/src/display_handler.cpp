@@ -111,20 +111,23 @@ void DisplayHandler::drawHeartbeatDots() {
 #if DISPLAY_ENABLED
     if (!_heartbeats) return;
 
-    // Position: top edge, just under the "LED Preview" title,
-    // right-aligned to leave room for the scene indicator on the
-    // far right. Each slot is an 8x4 strip — small enough that 8
-    // of them fit easily on 128 px.
+    // Position: just above the "LED count / FPS" footer so the status row
+    // doesn't collide with the title bar or scene indicator.
     const int16_t w = M5.Display.width();
-    const int16_t y = 2;
+    const int16_t h = M5.Display.height();
+    const int16_t y = h - 20;
     const int16_t dotW = 8;
     const int16_t dotH = 4;
     const int16_t gap = 2;
-    const int16_t rowW = HeartbeatCollector::MAX_SLAVES * (dotW + gap);
-    int16_t x = w - 32 - rowW; // leave 32 px for the scene tag
+    const uint8_t maxDots = 5;
+    const int16_t rowW = (maxDots * dotW) + ((maxDots - 1) * gap);
+    const int16_t x = w - rowW - 2;
+
+    M5.Display.fillRect(x - 1, y - 1, rowW + 2, dotH + 2, COLOR_BG);
 
     uint32_t now = millis();
-    for (uint8_t i = 0; i < HeartbeatCollector::MAX_SLAVES; i++) {
+    int16_t drawX = x;
+    for (uint8_t i = 0; i < maxDots; i++) {
         HeartbeatCollector::Status st = _heartbeats->statusOf(i, now);
         uint16_t colour;
         switch (st) {
@@ -135,8 +138,8 @@ void DisplayHandler::drawHeartbeatDots() {
             case HeartbeatCollector::EMPTY:
             default:                         colour = M5.Display.color565(40,  40,  40);  break;
         }
-        M5.Display.fillRect(x, y, dotW, dotH, colour);
-        x += dotW + gap;
+        M5.Display.fillRect(drawX, y, dotW, dotH, colour);
+        drawX += dotW + gap;
     }
 #endif
 }
