@@ -91,7 +91,8 @@ Repeat for each receiver device:
 - [ ] Power on all receivers first
 - [ ] Power on sender last
 - [ ] Confirm each device plays the fast RGBW boot sweep before entering "Waiting" state
-- [ ] On Atom Lite slaves the onboard LED goes RED during setup, then GREEN once init completes
+- [ ] On Atom Lite slaves the onboard LED goes RED during setup, then GREEN once init completes (PURPLE breathing if the previous reset was a brownout — investigate power)
+- [ ] On the master AtomS3 screen, the dot row above the preview turns green for each receiver within ~1 s of that receiver booting
 - [ ] All receivers report a synced MeshClock state once the sender starts broadcasting
 
 ### 2. MIDI Connection Test
@@ -105,6 +106,18 @@ Repeat for each receiver device:
 - [ ] All receivers show same animation
 - [ ] Animation moves in perfect sync across all strips
 - [ ] No visible timing differences
+
+### 3b. Self-Heal Test (link recovery)
+- [ ] With all 5 slaves running, stream a continuous CC sweep from the DAW for 1+ minute
+- [ ] Briefly move the sender outside ESP-NOW range and back
+- [ ] Slaves should resync within ~200 ms of the master coming back (full-universe refresh window)
+- [ ] No slave should require a power cycle to recover
+
+### 3c. Heartbeat Test (rig health visibility)
+- [ ] Power down one slave; its dot on the master screen goes red within ~7 s
+- [ ] Wait 30 s; that slot ages out (dim grey)
+- [ ] Power the slave back on; a green dot appears in a slot again
+- [ ] If you see a slave's dot in yellow ≥3 s without recovering, that slave is having trouble — check its physical onboard LED for boot state
 
 ### 4. Scene Preset Test
 - [ ] Hold CC127 ≥ 64 (Scene Save Mode)

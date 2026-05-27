@@ -87,7 +87,8 @@ Workflow:
 - **Velocity and scaling** – Keep CC automation between 0–120 to leave a little headroom for smoothing; the firmware clamps values anyway, but this prevents hard edges when mapping faders.
 - **Scenes per song** – Dedicate one MIDI clip lane per song section with the desired scene number plus any CC sweeps.
 - **Latency compensation** – ESP-NOW adds under 20 ms; if your DAW lets you offset a track by -20 ms you can align cues with audio transients perfectly.
-- **Failover** – The sender re-broadcasts the full universe every 200 ms, so a momentarily dropped delta packet self-heals in ≤200 ms even if the DAW keeps streaming CCs. If a slave hears nothing for >10 s it reboots itself; the onboard LED on Atom Lite slaves goes to a slow red blink before the reboot so you can spot the offender.
+- **Failover** – The sender re-broadcasts the full universe every 200 ms, so a momentarily dropped delta packet self-heals in ≤200 ms even if the DAW keeps streaming CCs. If a slave hears nothing for >10 s it reboots itself; the onboard LED on Atom Lite slaves goes to a slow red blink before the reboot so you can spot the offender. If the slave's previous reset was a brownout, the LED pulses purple instead and the boot RGBW sweep is skipped — that's the kind of failure to look for power/PSU side.
+- **Rig health at a glance** – Each slave broadcasts a 1 Hz heartbeat carrying its uptime, free heap, ms-since-last-DMX-frame, and last reset reason. The sender's AtomS3 screen shows a small coloured dot row (one dot per recently-heard slave): green = healthy, yellow = slow heartbeats (>3 s), red = lost (>7 s), dim grey = empty slot. After 30 s of silence a slot ages out so the row reflects what's actually in the rig right now.
 
 ## 7. Troubleshooting quick hits
 

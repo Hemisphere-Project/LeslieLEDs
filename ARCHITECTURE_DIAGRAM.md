@@ -88,7 +88,24 @@ Wi-Fi free light shows: LeslieLEDs turns MIDI automation into synchronized LED s
 - MeshClock is symmetric (every peer broadcasts and slews forward-only toward the highest clock it hears). There is no permanent master.
 - LedEngine only uses the shared clock, so `(state, meshMillis)` uniquely defines the output frame. If a packet drops, the next 200 ms full-universe refresh restores correct state.
 - Receivers mark DMX as "lost" if no frame arrives for >3 s, flip the onboard LED to a slow red blink, and `ESP.restart()` if no radio activity at all for >10 s.
-- Every boot shows the RGBW diagnostic sweep before waiting for DMX so cabling mistakes are obvious.
+- Sender `ESP.restart()`s if 100+ consecutive ESP-NOW broadcasts fail (~3 s of radio wedge at 30 Hz).
+- Every boot shows the RGBW diagnostic sweep before waiting for DMX so cabling mistakes are obvious — except when the previous reset was a brownout, in which case the sweep is skipped and the slave pulses purple instead (the sweep itself draws ~7 A and would re-trigger the brownout in a loop).
+
+## Wire-format Versioning
+
+The DMX chunk header carries a 4-bit protocol version (high nibble of byte 6, low nibble keeps the compression flag — zero overhead). A receiver running a different `PROTOCOL_VERSION` sees an unknown "compression type" via its existing branch and drops the packet, so an upgrade window produces silence-from-mismatched-peers rather than corrupted state or reboot loops. Bump `PROTOCOL_VERSION` (in `shared_libs/ESPNowDMX/src/ESPNowDMX_Common.h`) when the on-wire layout changes; coordinate a full reflash.
+
+## Observability
+
+Each slave broadcasts a 20-byte `HeartbeatPacket` (defined in `shared/leslie_protocol/src/leslie_protocol.h`) once per second:
+
+```
+type | version | nid[3] | resetReason | fps | uptime | freeHeap | msSinceLastFrame
+```
+
+`nid[3]` is just the last 3 bytes of the slave's MAC (Espressif's OUI prefix is redundant across a small homogeneous rig — dropping it saves bytes and makes the on-screen identifier compact).
+
+The master's `HeartbeatCollector` keeps up to 8 slots keyed by nid, ages out slots after 30 s of silence, and the AtomS3 screen renders a small dot row above the preview (green = OK, yellow = stale >3 s, red = lost >7 s, dim grey = empty slot). Slaves naturally ignore each other's heartbeats — the ESPNowDMX receiver discards anything that isn't `PACKET_TYPE_DATA_CHUNK`, so no filtering is needed in the receive path.
 
 ## Hardware Defaults
 

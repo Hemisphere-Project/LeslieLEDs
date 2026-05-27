@@ -9,8 +9,10 @@ Wireless, clock-synchronized LED shows for organ-inspired rigs. Midi2DMXnow turn
 - **Self-healing radio link** – Sender re-broadcasts the full universe every 200 ms on top of delta packets, so slaves recover from any dropped frame within ≤200 ms even under continuous CC automation.
 - **120-pixel RGBW baseline** – Both sender (preview strip) and receivers boot with the same 120 SK6812 LEDs, GPIO2 on AtomS3 and GPIO26 on Atom Lite/M5Core.
 - **RGBW boot sweep** – Every device plays a fast R→G→B→W test the moment LEDs power up.
-- **Status beacon on Atom Lite** – The onboard GPIO27 LED shows boot/ready/link-lost state across the room, no USB needed.
-- **Watchdog + auto-restart** – Each node self-resets if `setup()` hangs or if it goes >10 s without any radio activity.
+- **Status beacon on Atom Lite** – The onboard GPIO27 LED shows boot/ready/link-lost/brownout state across the room, no USB needed. After a brownout reset the slave skips the bright RGBW sweep (which would re-trigger the brownout) and pulses purple.
+- **Rig health on the master screen** – Each slave broadcasts a heartbeat once per second; the AtomS3 screen shows a small dot row, one coloured dot per recently-heard slave (green / yellow / red). Lets you spot a misbehaving node without USB or the GUI.
+- **Watchdog + auto-restart** – Each node self-resets if `setup()` hangs, if the LED render task deadlocks, if the slave goes >10 s without any radio activity, or if the sender's ESP-NOW broadcasts fail 100 times in a row.
+- **Wire-format versioning** – Packet header carries a protocol version; mismatched peers drop each other's packets cleanly instead of corrupting state during an upgrade window.
 - **Multi-transport MIDI** – USB MIDI (AtomS3), Serial MIDI (M5Core), or the controller app’s virtual port.
 - **Scene workflow** – Twenty presets (notes 36–55) plus a CC127 “scene save mode.”
 
@@ -61,7 +63,8 @@ Legacy references such as `_legacy/Midi2Strip/` remain untouched for context onl
    Either way the bridge exposes a virtual MIDI input named **LeslieCTRLs** that your DAW can route to.
 6. **Verify boot sweep + sync**
    - Receivers first, sender last. Every device flashes R→G→B→W before showing "Waiting for DMX".
-   - On Atom Lite slaves, the onboard LED goes dim-red during boot, dim-green once setup completes, slow red blink if the link drops.
+   - On Atom Lite slaves, the onboard LED goes dim-red during boot, dim-green once setup completes, slow red blink if the DMX link drops, slow purple breathing if the previous reset was a brownout (skips the RGBW sweep in that case).
+   - On the master's AtomS3 screen, look at the dot row above the preview: one dot per recently-heard slave. After ~1 s of normal operation all five should be green.
    - Move a few sliders: preview strip and remote strips should mirror each other immediately.
 
 ## MIDI + DAW control
