@@ -129,11 +129,15 @@ void playBootRGBWTest() {
   for (uint8_t i = 0; i < 4; ++i) {
     testState.colorA = testColors[i];
     testState.colorB = testColors[i];
-  ledEngine->update(millis(), testState);
+    ledEngine->update(millis(), testState);
 #if !defined(ARDUINO_ARCH_ESP32)
-  ledEngine->show();
+    ledEngine->show();
 #endif
-    delay(150);
+    uint32_t stepStart = millis();
+    while (millis() - stepStart < 150) {
+      esp_task_wdt_reset();
+      vTaskDelay(1);
+    }
   }
 
   // Return to black before regular rendering resumes
@@ -192,6 +196,7 @@ void setup() {
   
   midiHandler.setDMXState(&dmxState);
   midiHandler.setDisplayHandler(&displayHandler);
+  midiHandler.setHeartbeats(&heartbeats);
   
   // Initialize MeshClock so it owns the ESP-NOW driver and forwards
   // non-clock packets to our dispatcher (heartbeat collector + DMX drop).

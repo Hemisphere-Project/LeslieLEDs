@@ -192,11 +192,17 @@ void playBootRGBWTest() {
     for (uint8_t i = 0; i < 4; ++i) {
         testState.colorA = testColors[i];
         testState.colorB = testColors[i];
-    ledEngine->update(millis(), testState);
+        ledEngine->update(millis(), testState);
 #if !defined(ARDUINO_ARCH_ESP32)
-    ledEngine->show();
+        ledEngine->show();
 #endif
-        delay(150);
+        // Spin-wait instead of delay() so the WDT stays fed and FreeRTOS
+        // tasks (render task on core 1) can run between color steps.
+        uint32_t stepStart = millis();
+        while (millis() - stepStart < 150) {
+            esp_task_wdt_reset();
+            vTaskDelay(1);
+        }
     }
 
     // Return strip to black before waiting for DMX

@@ -28,7 +28,23 @@ MIDI_CHANNEL = 0  # Channel 1 (0-indexed)
 
 # SysEx protocol constants
 SYSEX_MANUFACTURER_ID = 0x7D  # Non-commercial/educational
-SYSEX_MSG_STATE_DUMP = 0x01   # Full state dump message
+SYSEX_MSG_STATE_DUMP  = 0x01  # Full state dump message
+SYSEX_MSG_RIG_HEALTH  = 0x02  # Slave heartbeat table (2 s interval)
+
+# HeartbeatCollector::Status enum (must match heartbeat_collector.h)
+SLOT_EMPTY = 0
+SLOT_OK    = 1
+SLOT_STALE = 2
+SLOT_LOST  = 3
+
+_STATUS_LABEL = {SLOT_EMPTY: "EMPTY", SLOT_OK: "OK   ", SLOT_STALE: "STALE", SLOT_LOST: "LOST "}
+
+# ESP reset reason codes (esp_reset_reason_t)
+_RESET_REASON = {
+    0: "UNK", 1: "POR", 2: "EXT", 3: "SW",
+    4: "PANIC", 5: "INT_WDT", 6: "TASK_WDT", 7: "WDT",
+    8: "SLEEP", 9: "BROWNOUT", 10: "SDIO",
+}
 
 # CC Mappings from config.h
 CC_MASTER_BRIGHTNESS = 1
@@ -130,6 +146,9 @@ class LeslieLEDsController:
         self._cc_min_interval = 0.004  # seconds between CC transmissions per control
         self._active_scene: int = -1  # Currently active scene (-1 = none)
         self._sysex_buffer: list = []  # Buffer for incoming SysEx
+        # Parsed rig health: list of dicts with keys nid, status, fps, reset
+        self._rig_health: list = []
+        self._last_health_print: float = 0.0  # monotonic time of last terminal print
         # When True, skip every DearPyGUI mutation (no UI is mounted).
         # Set by main_headless(); all _safe_* DPG helpers no-op in that mode.
         self.headless = False
@@ -250,7 +269,71 @@ class LeslieLEDsController:
             # Update active scene indicator
             scene = sysex_data[19] if len(sysex_data) > 19 else 127
             self._update_active_scene(scene if scene < MAX_SCENES else -1)
-    
+
+        elif msg_type == SYSEX_MSG_RIG_HEALTH and len(sysex_data) >= 4:
+            # Rig health table.  Format: F0 7D 02 <count> [N×6 bytes] F7
+            count = sysex_data[3]
+            slots = []
+            for i in range(count):
+                base = 4 + i * 6
+                if base + 5 >= len(sysex_data):
+                    break
+                slots.append({
+                    "nid":    (sysex_data[base], sysex_data[base+1], sysex_data[base+2]),
+                    "status": sysex_data[base+3],
+                    "fps":    sysex_data[base+4],
+                    "reset":  sysex_data[base+5],
+                })
+            self._rig_health = slots
+            self._update_rig_health_display()
+            if self.headless:
+                self._print_rig_health_if_due()
+
+    def _update_rig_health_display(self):
+        """Update rig-health text rows in the GUI. No-op in headless."""
+        if self.headless or dpg is None:
+            return
+        color_map = {
+            SLOT_OK:    (0,   200,  0,   255),
+            SLOT_STALE: (220, 180,  0,   255),
+            SLOT_LOST:  (220,  50,  50,  255),
+            SLOT_EMPTY: (80,   80,  80,  150),
+        }
+        for i in range(8):
+            tag = f"hb_dot_{i}"
+            if not dpg.does_item_exist(tag):
+                continue
+            if i < len(self._rig_health):
+                slot = self._rig_health[i]
+                nid = slot["nid"]
+                nid_str = f"{nid[0]:02X}:{nid[1]:02X}:{nid[2]:02X}"
+                status_label = _STATUS_LABEL.get(slot["status"], "?    ").strip()
+                rst = _RESET_REASON.get(slot["reset"], str(slot["reset"]))
+                text = f"  {nid_str}  {status_label:<5}  {slot['fps']:3d}fps  {rst}"
+                col = color_map.get(slot["status"], color_map[SLOT_EMPTY])
+            else:
+                text = "  --:--:--"
+                col = color_map[SLOT_EMPTY]
+            dpg.configure_item(tag, default_value=text, color=col)
+
+    def _print_rig_health_if_due(self, interval: float = 5.0):
+        """Print a rig-health table to stdout in headless mode (throttled)."""
+        now = time.monotonic()
+        if now - self._last_health_print < interval:
+            return
+        self._last_health_print = now
+        if not self._rig_health:
+            print("[rig] no slaves heard yet")
+            return
+        print("[rig] NID        STATUS   FPS  RST")
+        for s in self._rig_health:
+            nid = s["nid"]
+            nid_str = f"{nid[0]:02X}:{nid[1]:02X}:{nid[2]:02X}"
+            status  = _STATUS_LABEL.get(s["status"], "?    ")
+            fps     = s["fps"]
+            rst     = _RESET_REASON.get(s["reset"], str(s["reset"]))
+            print(f"[rig]  {nid_str}  {status}  {fps:3d}fps  {rst}")
+
     def _update_slider_from_sysex(self, cc_number, value):
         """Update a slider from SysEx data (value is 0-127). No-op in headless."""
         self._dpg_set(f"cc_{cc_number}_slider", value)
@@ -780,10 +863,22 @@ def create_gui():
                                  tag=f"scene_btn_{i}")
             
             dpg.add_spacer(height=10)
-            dpg.add_button(label="RESET", callback=on_reset_button, 
+            dpg.add_button(label="RESET", callback=on_reset_button,
                           width=200, height=30)
-    
-    dpg.create_viewport(title="LeslieLEDs Controller", width=500, height=950)
+
+        dpg.add_separator()
+
+        # Rig health: one line per slave slot, colour-coded by heartbeat status.
+        # Updated by _update_rig_health_display() whenever a SYSEX_MSG_RIG_HEALTH
+        # arrives from the master (every 2 s).
+        with dpg.collapsing_header(label="Rig Health", default_open=True):
+            dpg.add_text("Slave nodes (live via SysEx, 2 s interval):",
+                         color=(120, 120, 120))
+            for i in range(8):
+                dpg.add_text("  --:--:--", tag=f"hb_dot_{i}",
+                             color=(80, 80, 80, 150))
+
+    dpg.create_viewport(title="LeslieLEDs Controller", width=500, height=1050)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
