@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <M5Unified.h>
+#include <Preferences.h>
+#include <esp_system.h>
+#include <esp_task_wdt.h>
 #include <ESPNowDMX.h>
 #include <ESPNowMeshClock.h>
 #include <LedEngine.h>
@@ -35,6 +38,54 @@ LedEngine* ledEngine = nullptr;
 uint8_t dmxFrame[DMX_UNIVERSE_SIZE];
 unsigned long lastDMXSend = 0;
 const uint32_t DMX_SEND_INTERVAL = 33; // ~30Hz DMX refresh rate
+
+// Task WDT: if setup() or loop() ever hangs past this, the chip self-resets.
+const uint32_t WDT_TIMEOUT_MS = 15000;
+
+// Reset-reason rolling log in NVS. No serial required to read it back later.
+namespace bootlog {
+    constexpr const char* NAMESPACE = "bootlog";
+    constexpr const char* KEY_REASONS = "reasons";
+    constexpr const char* KEY_COUNT = "count";
+    constexpr size_t MAX_ENTRIES = 16;
+
+    void record(esp_reset_reason_t reason) {
+        Preferences p;
+        if (!p.begin(NAMESPACE, false)) return;
+
+        uint8_t buf[MAX_ENTRIES];
+        size_t len = p.getBytesLength(KEY_REASONS);
+        if (len > MAX_ENTRIES) len = MAX_ENTRIES;
+        if (len > 0) p.getBytes(KEY_REASONS, buf, len);
+
+        if (len >= MAX_ENTRIES) {
+            memmove(buf, buf + 1, MAX_ENTRIES - 1);
+            len = MAX_ENTRIES - 1;
+        }
+        buf[len++] = static_cast<uint8_t>(reason);
+
+        p.putBytes(KEY_REASONS, buf, len);
+        p.putUInt(KEY_COUNT, p.getUInt(KEY_COUNT, 0) + 1);
+        p.end();
+    }
+}
+
+static void wdtSetup() {
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    esp_task_wdt_config_t cfg = {
+        .timeout_ms = WDT_TIMEOUT_MS,
+        .idle_core_mask = 0,
+        .trigger_panic = true,
+    };
+    if (esp_task_wdt_reconfigure(&cfg) != ESP_OK) {
+        esp_task_wdt_init(&cfg);
+    }
+#else
+    esp_task_wdt_init(WDT_TIMEOUT_MS / 1000, true);
+#endif
+    esp_task_wdt_add(nullptr);
+    esp_task_wdt_reset();
+}
 
 // Quick RGBW sweep lets us spot wiring faults before DMX starts
 void playBootRGBWTest() {
@@ -82,12 +133,16 @@ void playBootRGBWTest() {
 // Setup
 // ========================================
 void setup() {
+  bootlog::record(esp_reset_reason());
+  wdtSetup();
+
   // Initialize M5
   auto cfg = M5.config();
   cfg.clear_display = true;
   cfg.output_power = true;
   M5.begin(cfg);
   displayHandler.begin();
+  esp_task_wdt_reset();
   
   // Initialize serial for debugging
   #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
@@ -111,6 +166,7 @@ void setup() {
   ledEngine = new LedEngine(ledConfig);
   ledEngine->begin();
   playBootRGBWTest();
+  esp_task_wdt_reset();
   displayHandler.setLedEngine(ledEngine);
   displayHandler.setDMXState(&dmxState);
   
@@ -162,12 +218,14 @@ void setup() {
 // Main Loop
 // ========================================
 void loop() {
+  esp_task_wdt_reset();
+
   M5.update();
 
   if (M5.BtnA.wasPressed()) {
     displayHandler.handleButtonPress();
   }
-  
+
   // Update MeshClock timing
   meshClock.loop();
   
