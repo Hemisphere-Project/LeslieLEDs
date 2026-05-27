@@ -406,10 +406,8 @@ void loop() {
     // applyDMXFrame() writing _state and ledEngine->update() reading it.
     if (g_pendingFrame) {
         static uint8_t frameCopy[DMX_UNIVERSE_SIZE];
-        uint32_t rxMillis;
         portENTER_CRITICAL(&g_pendingFrameMux);
         memcpy(frameCopy, g_pendingFrameBuf, DMX_UNIVERSE_SIZE);
-        rxMillis = g_pendingFrameRxMillis;
         g_pendingFrame = false;
         portEXIT_CRITICAL(&g_pendingFrameMux);
 
@@ -417,12 +415,18 @@ void loop() {
             bool wasDisconnected = !dmxConnected;
             dmxAdapter->applyDMXFrame(frameCopy, DMX_UNIVERSE_SIZE);
             dmxConnected = true;
-            lastDMXFrame = rxMillis;
-            noDMXWatchdogSince = rxMillis;
+            // Use 'now' (sampled at loop top) rather than the ISR's
+            // g_pendingFrameRxMillis. The RX callback fires in the Wi-Fi
+            // task and its millis() stamp can be fractionally *ahead* of
+            // 'now', causing now-lastDMXFrame to underflow to UINT32_MAX
+            // and immediately trigger both the 3 s DMX timeout and the
+            // 30 s no-DMX watchdog.
+            lastDMXFrame = now;
+            noDMXWatchdogSince = now;
             if (wasDisconnected) {
                 beacon.setState(BootBeacon::READY);
             }
-            beacon.noteDMXActivity(rxMillis);
+            beacon.noteDMXActivity(now);
         }
     }
 
