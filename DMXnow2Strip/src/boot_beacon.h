@@ -20,6 +20,7 @@ public:
 
     bool begin(uint8_t gpio);
     void setState(State s);
+    void noteDMXActivity(uint32_t now);
     void tick(uint32_t now);
 
 private:
@@ -28,6 +29,8 @@ private:
     void* _strand;
     State _state;
     uint32_t _lastBlink;
+    uint32_t _lastActivityPulse;
+    uint32_t _activityPulseUntil;
     bool _blinkOn;
 };
 

@@ -19,6 +19,7 @@ public:
     void setLedEngine(LedEngineLib::LedEngine* engine);
     void setDMXState(DMXState* state);
     void setHeartbeats(const HeartbeatCollector* hb) { _heartbeats = hb; }
+    void setRadioStatus(uint32_t totalFailed, uint16_t consecutiveFailures);
     void logMessage(const char* message);
     void showSceneNotification(uint8_t sceneNumber, bool isSave);
 
@@ -40,10 +41,14 @@ private:
     bool _needsFullRedraw;
     int8_t _currentScene;  // Current scene (0-9), -1 if none
     unsigned long _lastPreviewUpdate;
+    uint32_t _radioTotalFailed;
+    uint16_t _radioConsecutiveFailures;
+    unsigned long _radioAlertUntil;
 
     LedPreviewRenderer _previewRenderer;
 
     void drawPreview();
+    void drawRadioStatus();
     void drawSceneIndicator();
     void drawSceneNotification();
     void drawHeartbeatDots();

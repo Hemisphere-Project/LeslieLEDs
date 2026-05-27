@@ -267,6 +267,8 @@ void loop() {
 #endif
   }
 
+  ESPNowDMX_Sender::SendStats stats = ESPNowDMX_Sender::getSendStats();
+  displayHandler.setRadioStatus(stats.totalFailed, stats.consecutiveFailures);
   displayHandler.update();
   
   // Generate and send DMX frame at regular intervals
@@ -298,7 +300,6 @@ void loop() {
   // with what slaves do on prolonged radio silence. Threshold is
   // 100 consecutive failures (~3 s at 30 Hz) — well above transient
   // collisions during heavy CC bursts.
-  ESPNowDMX_Sender::SendStats stats = ESPNowDMX_Sender::getSendStats();
   if (stats.consecutiveFailures > 100) {
     #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
       Serial.printf("[RADIO] %u consecutive send failures — restarting\n",

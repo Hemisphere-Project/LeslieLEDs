@@ -10,7 +10,10 @@ DisplayHandler::DisplayHandler()
     , _sceneNotificationIsSave(false)
     , _needsFullRedraw(true)
     , _currentScene(-1)
-    , _lastPreviewUpdate(0) {
+    , _lastPreviewUpdate(0)
+    , _radioTotalFailed(0)
+    , _radioConsecutiveFailures(0)
+    , _radioAlertUntil(0) {
 }
 
 void DisplayHandler::begin() {
@@ -31,6 +34,16 @@ void DisplayHandler::setLedEngine(LedEngineLib::LedEngine* engine) {
 
 void DisplayHandler::setDMXState(DMXState* state) {
     _dmxState = state;
+}
+
+void DisplayHandler::setRadioStatus(uint32_t totalFailed, uint16_t consecutiveFailures) {
+#if DISPLAY_ENABLED
+    if (totalFailed > _radioTotalFailed || consecutiveFailures > 0) {
+        _radioAlertUntil = millis() + 8000;
+    }
+#endif
+    _radioTotalFailed = totalFailed;
+    _radioConsecutiveFailures = consecutiveFailures;
 }
 
 void DisplayHandler::update() {
@@ -100,10 +113,43 @@ void DisplayHandler::drawPreview() {
     // Draw scene indicator on top of preview
     drawSceneIndicator();
 
+    // Sender-side ESP-NOW TX diagnostics for USB-MIDI mode where serial
+    // is unavailable.
+    drawRadioStatus();
+
     // Rig health dot row (slaves heard recently, one coloured dot each)
     drawHeartbeatDots();
 
     _needsFullRedraw = false;
+#endif
+}
+
+void DisplayHandler::drawRadioStatus() {
+#if DISPLAY_ENABLED
+    const int16_t w = M5.Display.width();
+    const int16_t h = M5.Display.height();
+    const int16_t boxW = 42;
+    const int16_t boxH = 10;
+    const int16_t x = w - boxW - 2;
+    const int16_t y = h - 11;
+    const uint32_t now = millis();
+
+    uint16_t bg = M5.Display.color565(0, 96, 0);
+    char label[8] = "TX OK";
+
+    if (_radioConsecutiveFailures > 0) {
+        bg = M5.Display.color565(180, 20, 20);
+        snprintf(label, sizeof(label), "TXx%u", _radioConsecutiveFailures);
+    } else if (_radioTotalFailed > 0 && now < _radioAlertUntil) {
+        bg = M5.Display.color565(180, 110, 0);
+        snprintf(label, sizeof(label), "TX!%lu", (unsigned long)(_radioTotalFailed % 1000));
+    }
+
+    M5.Display.fillRect(x, y, boxW, boxH, bg);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(TFT_WHITE, bg);
+    M5.Display.setCursor(x + 3, y + 1);
+    M5.Display.print(label);
 #endif
 }
 
@@ -168,20 +214,24 @@ void DisplayHandler::drawSceneNotification() {
 #if DISPLAY_ENABLED
     int16_t w = M5.Display.width();
     int16_t h = M5.Display.height();
+    uint8_t sceneNumber = _sceneNotificationNumber + 1;
 
     uint16_t bgColor = _sceneNotificationIsSave ?
         M5.Display.color565(0, 80, 0) :
         M5.Display.color565(0, 0, 80);
 
     M5.Display.fillScreen(bgColor);
-    M5.Display.setTextSize(3);
+    uint8_t sceneTextSize = (sceneNumber >= 10) ? 2 : 3;
+    int16_t sceneCharWidth = (sceneTextSize == 3) ? 18 : 12;
+
+    M5.Display.setTextSize(sceneTextSize);
     M5.Display.setTextColor(TFT_WHITE, bgColor);
 
     char sceneText[16];
-    snprintf(sceneText, sizeof(sceneText), "SCENE %d", _sceneNotificationNumber + 1);
-    int16_t textWidth = strlen(sceneText) * 18;
+    snprintf(sceneText, sizeof(sceneText), "SCENE %d", sceneNumber);
+    int16_t textWidth = strlen(sceneText) * sceneCharWidth;
     int16_t x = (w - textWidth) / 2;
-    int16_t y = (h / 2) - 24;
+    int16_t y = (h / 2) - ((sceneTextSize == 3) ? 24 : 18);
     M5.Display.setCursor(x, y);
     M5.Display.println(sceneText);
 

@@ -15,6 +15,8 @@ bool BootBeacon::begin(uint8_t gpio) {
     _strand = LibStrip::addStrand(s);
     _state = BOOT;
     _lastBlink = millis();
+    _lastActivityPulse = 0;
+    _activityPulseUntil = 0;
     _blinkOn = true;
     return _strand != nullptr;
 }
@@ -22,6 +24,8 @@ bool BootBeacon::begin(uint8_t gpio) {
 void BootBeacon::setState(State s) {
     _state = s;
     _lastBlink = millis();
+    _lastActivityPulse = 0;
+    _activityPulseUntil = 0;
     _blinkOn = true;
     switch (s) {
         case BOOT:     writeColor(80, 0, 0);   break;  // dim red
@@ -32,8 +36,27 @@ void BootBeacon::setState(State s) {
     }
 }
 
+void BootBeacon::noteDMXActivity(uint32_t now) {
+    if (_state != READY) return;
+
+    // Human-visible receive indication: pulse to a brighter green at most
+    // ~4 times per second while DMX is flowing, leaving READY as dim green.
+    if (_activityPulseUntil > now) return;
+    if (_lastActivityPulse > 0 && (now - _lastActivityPulse) < 250) return;
+
+    _lastActivityPulse = now;
+    _activityPulseUntil = now + 90;
+    writeColor(0, 180, 0);
+}
+
 void BootBeacon::tick(uint32_t now) {
     switch (_state) {
+        case READY:
+            if (_activityPulseUntil > 0 && now >= _activityPulseUntil) {
+                _activityPulseUntil = 0;
+                writeColor(0, 60, 0);
+            }
+            break;
         case LOST:
             if (now - _lastBlink < 500) return;
             _blinkOn = !_blinkOn;

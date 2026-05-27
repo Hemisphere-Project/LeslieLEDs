@@ -40,6 +40,7 @@ const uint32_t DMX_TIMEOUT = 3000;
 // only the DMX receive path is stuck.
 const uint32_t RADIO_SILENCE_RESTART_MS = 10000;
 const uint32_t NO_DMX_RESTART_MS        = 30000;
+const uint32_t FRESH_CLOCK_ACTIVITY_MS  = 2000;
 unsigned long lastRadioActivity = 0;
 unsigned long noDMXWatchdogSince = 0;
 
@@ -378,10 +379,14 @@ void loop() {
     meshClock.loop();
 
     syncState = meshClock.getSyncState();
+    uint32_t msSinceClockSync = meshClock.msSinceLastSync();
+    bool freshClockActivity =
+        syncState == SyncState::SYNCED &&
+        msSinceClockSync <= FRESH_CLOCK_ACTIVITY_MS;
 
     // Once we've synced to the mesh at least once, start a watchdog for
     // the DMX receive path even if the first DMX frame never arrives.
-    if (syncState == SyncState::SYNCED) {
+    if (freshClockActivity) {
         if (noDMXWatchdogSince == 0) {
             noDMXWatchdogSince = now;
         }
@@ -391,7 +396,7 @@ void loop() {
 
     // Track any sign of life from the radio: either a DMX frame or a clock
     // packet. Used by the radio-silence self-heal below.
-    if (g_pendingFrame || syncState == SyncState::SYNCED) {
+    if (g_pendingFrame || freshClockActivity) {
         lastRadioActivity = now;
     }
 
@@ -417,6 +422,7 @@ void loop() {
             if (wasDisconnected) {
                 beacon.setState(BootBeacon::READY);
             }
+            beacon.noteDMXActivity(rxMillis);
         }
     }
 
@@ -444,14 +450,16 @@ void loop() {
         ESP.restart();
     }
 
-    // DMX-receive-path self-heal: if MeshClock is synced (clock packets
-    // are arriving, so the radio is alive) but no DMX frame has been
+    // DMX-receive-path self-heal: if fresh clock packets are still arriving
+    // (so the radio is alive) but no DMX frame has been
     // applied for 30 s, the ESPNowDMX receiver is wedged. Reboot.
     if (noDMXWatchdogSince > 0 &&
-        syncState == SyncState::SYNCED &&
+        freshClockActivity &&
         (now - noDMXWatchdogSince) > NO_DMX_RESTART_MS) {
         #if DEBUG_MODE
-            Serial.println("[DMX] Synced but no DMX for >30s — restarting");
+            Serial.printf("[DMX] No DMX for %lu ms while clock age is %lu ms — restarting\n",
+                          (unsigned long)(now - noDMXWatchdogSince),
+                          (unsigned long)msSinceClockSync);
             Serial.flush();
         #endif
         delay(50);
