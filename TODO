@@ -22,5 +22,7 @@ All
 
 
 Animation:
-Waveform = use Animation control to change amplitude depth
 Rainbow = set start and stop color
+
+Chase: BPM sync
+Brightness linearity

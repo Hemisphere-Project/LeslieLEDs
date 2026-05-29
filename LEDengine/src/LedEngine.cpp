@@ -509,19 +509,52 @@ void LedEngine::renderSolid() {
 }
 
 void LedEngine::renderDualSolid() {
-    uint16_t split = _config.ledCount / 2;
+    // Animated frontier position based on phase
+    uint32_t travel = _animationPhase;
+    uint16_t split;
+    
+    switch (_state.direction) {
+        case DIR_BACKWARD:
+            split = _config.ledCount - 1 - (travel % _config.ledCount);
+            break;
+        case DIR_PINGPONG:
+            split = pingPongIndex(travel, _config.ledCount);
+            break;
+        case DIR_FORWARD:
+        default:
+            split = travel % _config.ledCount;
+            break;
+    }
 
     if (_state.blendMode == 0) {
-        for (uint16_t i = 0; i < split; ++i) {
-            setPixelRGBW(i, _state.colorA);
-        }
-        for (uint16_t i = split; i < _config.ledCount; ++i) {
-            setPixelRGBW(i, _state.colorB);
+        // Hard split
+        for (uint16_t i = 0; i < _config.ledCount; ++i) {
+            if (i < split) {
+                setPixelRGBW(i, _state.colorA);
+            } else {
+                setPixelRGBW(i, _state.colorB);
+            }
         }
     } else {
-        uint16_t lastIndex = (_config.ledCount > 1) ? (_config.ledCount - 1) : 1;
+        // Gradient blend around the frontier
+        // blendMode controls the width of the gradient zone (1-255 -> narrow to wide)
+        uint16_t gradientWidth = map(_state.blendMode, 1, 255, 2, _config.ledCount / 2);
+        if (gradientWidth < 2) gradientWidth = 2;
+        
         for (uint16_t i = 0; i < _config.ledCount; ++i) {
-            uint8_t blend = map(i, 0, lastIndex, 0, 255);
+            int16_t distFromSplit = static_cast<int16_t>(i) - static_cast<int16_t>(split);
+            
+            uint8_t blend;
+            if (distFromSplit <= -static_cast<int16_t>(gradientWidth)) {
+                blend = 0;  // Full colorA
+            } else if (distFromSplit >= static_cast<int16_t>(gradientWidth)) {
+                blend = 255;  // Full colorB
+            } else {
+                // Gradient zone
+                blend = map(distFromSplit, -static_cast<int16_t>(gradientWidth), 
+                           static_cast<int16_t>(gradientWidth), 0, 255);
+            }
+            
             ColorRGBW mixed;
             mixed.r = lerp8by8(_state.colorA.r, _state.colorB.r, blend);
             mixed.g = lerp8by8(_state.colorA.g, _state.colorB.g, blend);
@@ -639,10 +672,10 @@ void LedEngine::renderWaveform() {
             break;
     }
 
-    // Use animationCtrl to set minimum brightness (depth)
-    // animationCtrl=0: oscillates 0-255 (full depth)
-    // animationCtrl=255: oscillates 255-255 (no depth, always max)
-    uint8_t minBrightness = _state.animationCtrl;
+    // Use blendMode to set minimum brightness (depth)
+    // blendMode=0: oscillates 0-255 (full depth)
+    // blendMode=255: oscillates 255-255 (no depth, always max)
+    uint8_t minBrightness = _state.blendMode;
     waveValue = minBrightness + scale8(waveValue, 255 - minBrightness);
 
     ColorRGBW waved = _state.colorA;

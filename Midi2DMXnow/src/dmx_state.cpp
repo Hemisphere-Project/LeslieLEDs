@@ -341,21 +341,54 @@ bool DMXState::loadScenesFromStorage() {
 
     size_t expectedSize = sizeof(SceneStorageBlock);
     size_t storedSize = _preferences.getBytesLength(SCENE_STORAGE_KEY);
-    if (storedSize != expectedSize) {
-        return false;
+    
+    // Check for exact match (current format - 64 scenes)
+    if (storedSize == expectedSize) {
+        SceneStorageBlock block;
+        if (_preferences.getBytes(SCENE_STORAGE_KEY, &block, expectedSize) != expectedSize) {
+            return false;
+        }
+        if (block.magic != SCENE_STORAGE_MAGIC) {
+            return false;
+        }
+        memcpy(_scenes, block.presets, sizeof(_scenes));
+        return true;
     }
+    
+    // Migration helper lambda
+    auto tryMigrate = [&](size_t oldSceneCount, const char* label) -> bool {
+        size_t oldSize = sizeof(uint32_t) + oldSceneCount * sizeof(ScenePreset);
+        if (storedSize != oldSize) return false;
+        
+        // Allocate temporary buffer for old data
+        uint8_t* buffer = new uint8_t[oldSize];
+        if (_preferences.getBytes(SCENE_STORAGE_KEY, buffer, oldSize) != oldSize) {
+            delete[] buffer;
+            return false;
+        }
+        
+        uint32_t magic = *reinterpret_cast<uint32_t*>(buffer);
+        if (magic != SCENE_STORAGE_MAGIC) {
+            delete[] buffer;
+            return false;
+        }
+        
+        // Copy old scenes
+        ScenePreset* oldPresets = reinterpret_cast<ScenePreset*>(buffer + sizeof(uint32_t));
+        memcpy(_scenes, oldPresets, oldSceneCount * sizeof(ScenePreset));
+        delete[] buffer;
+        
+        Serial.printf("Migrated %d scenes from %s format to 64-scene format\n", 
+                      (int)oldSceneCount, label);
+        persistScenes();
+        return true;
+    };
+    
+    // Try migrations from older formats
+    if (tryMigrate(20, "20-scene")) return true;
+    if (tryMigrate(10, "10-scene")) return true;
 
-    SceneStorageBlock block;
-    if (_preferences.getBytes(SCENE_STORAGE_KEY, &block, expectedSize) != expectedSize) {
-        return false;
-    }
-
-    if (block.magic != SCENE_STORAGE_MAGIC) {
-        return false;
-    }
-
-    memcpy(_scenes, block.presets, sizeof(_scenes));
-    return true;
+    return false;
 }
 
 void DMXState::persistScenes() {

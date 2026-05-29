@@ -627,7 +627,8 @@ int LibStrip::updatePixels(strand_t* strand) {
         return -1;
     }
 
-    const int brightLimit = std::clamp(strand->brightLimit, 0, 255);
+    // Apply gamma correction to brightness for perceptually linear dimming
+    const int brightLimit = gamma8(static_cast<uint8_t>(std::clamp(strand->brightLimit, 0, 255)));
 
     for (int i = 0; i < strand->numPixels; ++i) {
         pixelColor_t color = strand->pixels[i];

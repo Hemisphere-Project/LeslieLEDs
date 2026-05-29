@@ -134,7 +134,8 @@
 // ========================================
 // Scene Configuration
 // ========================================
-#define MAX_SCENES 20
+#define MAX_SCENES 64  // Storage capacity (future-proof)
+#define VISIBLE_SCENES 20  // Currently exposed via MIDI notes 36-55
 
 // ========================================
 // Debug Configuration
