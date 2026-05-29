@@ -1,0 +1,9 @@
+{
+  "name": "leslie_protocol",
+  "version": "0.1.0",
+  "description": "Shared on-the-wire protocol constants for LeslieLEDs sender (Midi2DMXnow) and receivers (DMXnow2Strip). Header-only.",
+  "keywords": "leslieleds,dmx,protocol",
+  "frameworks": "arduino",
+  "platforms": ["espressif32"],
+  "headers": ["leslie_protocol.h"]
+}

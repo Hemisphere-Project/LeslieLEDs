@@ -8,26 +8,27 @@
 // Forward declarations
 class DMXState;
 class DisplayHandler;
+class HeartbeatCollector;
 
 // SysEx protocol constants
-#define SYSEX_MANUFACTURER_ID 0x7D  // Non-commercial/educational
-#define SYSEX_MSG_STATE_DUMP  0x01  // Full state dump message
+#define SYSEX_MANUFACTURER_ID    0x7D  // Non-commercial/educational
+#define SYSEX_MSG_STATE_DUMP     0x01  // Full state dump
+#define SYSEX_MSG_RIG_HEALTH     0x02  // Slave heartbeat table
 
 class MIDIHandler {
 public:
     MIDIHandler();
-    
+
     void begin();
     void update();
-    
-    // Set references to other components
+
     void setDMXState(DMXState* state);
     void setDisplayHandler(DisplayHandler* display);
-    
-    // Send current state as SysEx (call after scene load or periodically)
+    void setHeartbeats(HeartbeatCollector* hb);
+
     void sendStateSysEx();
-    
-    // Get last received message info for display
+    void sendRigHealthSysEx();
+
     const char* getLastMessage() const { return _processor.getLastMessage(); }
     unsigned long getLastMessageTime() const { return _processor.getLastMessageTime(); }
 
@@ -35,8 +36,11 @@ private:
     USBMIDI _midi;
     MidiProcessor _processor;
     DMXState* _dmxState;
+    HeartbeatCollector* _heartbeats;
     uint32_t _lastSysExSend;
-    static constexpr uint32_t SYSEX_SEND_INTERVAL = 500; // ms
+    uint32_t _lastRigHealthSend;
+    static constexpr uint32_t SYSEX_SEND_INTERVAL       = 500;  // ms
+    static constexpr uint32_t RIG_HEALTH_SEND_INTERVAL  = 2000; // ms
 };
 
 #endif // MIDI_HANDLER_H

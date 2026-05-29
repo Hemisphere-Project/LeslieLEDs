@@ -1,10 +1,13 @@
 #include "midi_handler.h"
 #include "dmx_state.h"
 #include "display_handler.h"
+#include "heartbeat_collector.h"
 #include "config.h"
 #include <USB.h>
 
-MIDIHandler::MIDIHandler() : _dmxState(nullptr), _lastSysExSend(0) {}
+MIDIHandler::MIDIHandler()
+    : _dmxState(nullptr), _heartbeats(nullptr),
+      _lastSysExSend(0), _lastRigHealthSend(0) {}
 
 void MIDIHandler::begin() {
     // Set USB device name before starting
@@ -23,6 +26,10 @@ void MIDIHandler::setDMXState(DMXState* state) {
 
 void MIDIHandler::setDisplayHandler(DisplayHandler* display) {
     _processor.setDisplayHandler(display);
+}
+
+void MIDIHandler::setHeartbeats(HeartbeatCollector* hb) {
+    _heartbeats = hb;
 }
 
 void MIDIHandler::sendStateSysEx() {
@@ -69,6 +76,56 @@ void MIDIHandler::sendStateSysEx() {
     _midi.write(0xF7);  // SysEx end
 }
 
+void MIDIHandler::sendRigHealthSysEx() {
+    if (!_heartbeats) return;
+
+    // Per-slot payload: nid[0..2] (masked to 7 bits), status (0-4),
+    // fps (0-127), resetReason (0-127).  6 bytes × 8 slots max = 48 bytes.
+    // Full message: F0 7D 02 <count> [slots...] F7
+    HeartbeatCollector::Slot slots[HeartbeatCollector::MAX_SLAVES];
+    _heartbeats->copySlots(slots);  // thread-safe snapshot
+    const uint32_t now = millis();
+
+    auto statusFromSnapshot = [now](const HeartbeatCollector::Slot& slot) {
+        if (!slot.used) return HeartbeatCollector::EMPTY;
+
+        const uint32_t age = now - slot.lastHeardLocalMs;
+        if (age >= HeartbeatCollector::LOST_MS) return HeartbeatCollector::LOST;
+        if (age >= HeartbeatCollector::STALE_MS) return HeartbeatCollector::STALE;
+        if (slot.last.msSinceLastFrame >= HeartbeatCollector::NO_DMX_FRAME_MS) {
+            return HeartbeatCollector::NO_DMX;
+        }
+        return HeartbeatCollector::OK;
+    };
+
+    uint8_t buf[4 + HeartbeatCollector::MAX_SLAVES * 6 + 1];
+    buf[0] = 0xF0;
+    buf[1] = SYSEX_MANUFACTURER_ID;
+    buf[2] = SYSEX_MSG_RIG_HEALTH;
+
+    uint8_t count = 0;
+    uint8_t* p = buf + 4;  // reserve byte 3 for count
+    for (uint8_t i = 0; i < HeartbeatCollector::MAX_SLAVES; ++i) {
+        const auto& s = slots[i];
+        if (!s.used) continue;
+        p[0] = s.nid[0] & 0x7F;
+        p[1] = s.nid[1] & 0x7F;
+        p[2] = s.nid[2] & 0x7F;
+        p[3] = static_cast<uint8_t>(statusFromSnapshot(s));
+        p[4] = s.last.fps & 0x7F;
+        p[5] = s.last.lastResetReason & 0x7F;
+        p += 6;
+        ++count;
+    }
+    buf[3] = count;
+    *p++ = 0xF7;
+
+    const int totalLen = static_cast<int>(p - buf);
+    for (int i = 0; i < totalLen; ++i) {
+        _midi.write(buf[i]);
+    }
+}
+
 void MIDIHandler::update() {
     midiEventPacket_t packet;
     
@@ -100,5 +157,9 @@ void MIDIHandler::update() {
     if (now - _lastSysExSend >= SYSEX_SEND_INTERVAL) {
         sendStateSysEx();
         _lastSysExSend = now;
+    }
+    if (now - _lastRigHealthSend >= RIG_HEALTH_SEND_INTERVAL) {
+        sendRigHealthSysEx();
+        _lastRigHealthSend = now;
     }
 }

@@ -10,20 +10,26 @@
 
 ## Library Dependencies
 
-Both projects require these libraries (auto-installed by PlatformIO):
+Both PlatformIO projects pick up:
 
-- [ ] ESPNowDMX: https://github.com/Hemisphere-Project/ESPNowDMX
-- [ ] ESPNowMeshClock: https://github.com/Hemisphere-Project/ESPNowMeshClock
-- [ ] FastLED (receiver only)
-- [ ] M5Unified (M5 platforms only)
+- FastLED, M5Unified — fetched from the PlatformIO registry on first build.
+- `leslie_protocol/` — header-only, in-repo at `shared/leslie_protocol/`. Holds the DMX channel layout that both firmwares must agree on.
+- ESPNowDMX, ESPNowMeshClock — git clones inside `shared_libs/`. **This folder is gitignored**, so a fresh clone of LeslieLEDs will not have them. Clone manually:
+
+```bash
+mkdir -p shared_libs
+git clone https://github.com/Hemisphere-Project/ESPNowDMX        shared_libs/ESPNowDMX
+git clone https://github.com/Hemisphere-Project/ESPNowMeshClock  shared_libs/ESPNowMeshClock
+```
+
+Both PIO envs use `lib_extra_dirs = ../LEDengine ../shared ../shared_libs`, so once the two clones exist the build resolves them automatically.
 
 ### Contributing fixes upstream
 
-1. Fork `https://github.com/Hemisphere-Project/ESPNowDMX` and clone your fork next to this repo (e.g., `../shared_libs/ESPNowDMX`).
-2. Create a feature branch, make changes, and keep that folder checked into *its* git repo only (do **not** re-add it to this project).
-3. From `Midi2DMXnow` or `DMXnow2Strip`, delete `.pio/libdeps/<env>/ESPNowDMX` to force PlatformIO to pick up the local fork via the existing `lib_extra_dirs = ../shared_libs` entry.
-4. Run the usual builds (`pio run -e m5stack_atoms3`, `pio run -e m5core`, `pio run -e atom_lite`, etc.) until they succeed.
-5. Push the branch to your fork, open a PR against Hemisphere-Project/ESPNowDMX, and once merged, remove the temporary local folder so future builds use the upstream commit again.
+1. Make changes inside `shared_libs/ESPNowDMX` (or `…/ESPNowMeshClock`) — it is its own git checkout.
+2. Rebuild `Midi2DMXnow` and `DMXnow2Strip` until they succeed.
+3. Push the branch to your fork and open a PR against `Hemisphere-Project/ESPNowDMX` / `…MeshClock`.
+4. Once merged, `git pull` inside `shared_libs/<lib>` to switch back to upstream `main`.
 
 ## Build and Flash
 
@@ -85,7 +91,9 @@ Repeat for each receiver device:
 - [ ] Power on all receivers first
 - [ ] Power on sender last
 - [ ] Confirm each device plays the fast RGBW boot sweep before entering "Waiting" state
-- [ ] All receivers show "Clock: Slave" status
+- [ ] On Atom Lite slaves the onboard LED goes RED during setup, then GREEN once init completes (PURPLE breathing if the previous reset was a brownout — investigate power)
+- [ ] On the master AtomS3 screen, the dot row above the preview turns green for each receiver within ~1 s of that receiver booting
+- [ ] All receivers report a synced MeshClock state once the sender starts broadcasting
 
 ### 2. MIDI Connection Test
 - [ ] Send MIDI CC1 (Master Brightness): LEDs respond
@@ -99,12 +107,25 @@ Repeat for each receiver device:
 - [ ] Animation moves in perfect sync across all strips
 - [ ] No visible timing differences
 
+### 3b. Self-Heal Test (link recovery)
+- [ ] With all 5 slaves running, stream a continuous CC sweep from the DAW for 1+ minute
+- [ ] Briefly move the sender outside ESP-NOW range and back
+- [ ] Slaves should resync within ~200 ms of the master coming back (full-universe refresh window)
+- [ ] No slave should require a power cycle to recover
+
+### 3c. Heartbeat Test (rig health visibility)
+- [ ] Power down one slave; its dot on the master screen goes red within ~7 s
+- [ ] Wait 30 s; that slot ages out (dim grey)
+- [ ] Power the slave back on; a green dot appears in a slot again
+- [ ] If you see a slave's dot in yellow ≥3 s without recovering, that slave is having trouble — check its physical onboard LED for boot state
+
 ### 4. Scene Preset Test
-- [ ] Hold CC127 > 0 (Scene Save Mode)
-- [ ] Press Note 36: Saves current state as Scene 1
+- [ ] Hold CC127 ≥ 64 (Scene Save Mode)
+- [ ] Press Note 36: Saves current state as Scene 1 (of 20 — notes 36–55)
 - [ ] Change settings
-- [ ] Press Note 36 again: Recalls Scene 1
+- [ ] Press Note 36 again with CC127 = 0: Recalls Scene 1
 - [ ] Verify all receivers change together
+- [ ] Release the scene note — slaves go to blackout while held off; press again to re-trigger
 
 ### 5. Wireless Range Test
 - [ ] Move receivers apart

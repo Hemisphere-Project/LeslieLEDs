@@ -7,6 +7,7 @@
 #include "config.h"
 #include "dmx_state.h"
 #include "led_preview_renderer.h"
+#include "heartbeat_collector.h"
 
 class DisplayHandler {
 public:
@@ -17,26 +18,21 @@ public:
 
     void setLedEngine(LedEngineLib::LedEngine* engine);
     void setDMXState(DMXState* state);
+    void setHeartbeats(const HeartbeatCollector* hb) { _heartbeats = hb; }
+    void setRadioStatus(uint32_t totalFailed, uint16_t consecutiveFailures);
     void logMessage(const char* message);
     void showSceneNotification(uint8_t sceneNumber, bool isSave);
-    
+
     // Button press now loads next scene
     void handleButtonPress();
-    
+
     // Track current scene (called when scene changes via MIDI or button)
     void setCurrentScene(int8_t scene) { _currentScene = scene; }
 
 private:
     LedEngineLib::LedEngine* _ledEngine;
     DMXState* _dmxState;
-
-    struct LogEntry {
-        char text[32];
-        unsigned long timestamp;
-    };
-
-    LogEntry _logEntries[MIDI_LOG_LINES];
-    int _logIndex;
+    const HeartbeatCollector* _heartbeats;
 
     unsigned long _lastUpdate;
     unsigned long _sceneNotificationEnd;
@@ -45,12 +41,17 @@ private:
     bool _needsFullRedraw;
     int8_t _currentScene;  // Current scene (0-9), -1 if none
     unsigned long _lastPreviewUpdate;
+    uint32_t _radioTotalFailed;
+    uint16_t _radioConsecutiveFailures;
+    unsigned long _radioAlertUntil;
 
     LedPreviewRenderer _previewRenderer;
 
     void drawPreview();
+    void drawRadioStatus();
     void drawSceneIndicator();
     void drawSceneNotification();
+    void drawHeartbeatDots();
 };
 
 #endif // DISPLAY_HANDLER_H

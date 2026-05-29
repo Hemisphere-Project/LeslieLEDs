@@ -1,24 +1,57 @@
 #!/usr/bin/env python3
 """
 LeslieLEDs MIDI Controller
-Simple DearPyGUI interface for controlling LeslieLEDs without a DAW
-Supports both USB MIDI (AtomS3) and Serial MIDI (M5Core) devices
+Bridges a DAW's virtual MIDI port to the Midi2DMXnow hardware.
+Two run modes:
+  * default: DearPyGUI desktop UI with sliders + scene buttons
+  * --headless: no GUI, just the virtual port forwarder (production rigs)
 """
 
-import dearpygui.dearpygui as dpg
+import argparse
+import os
+import signal
+import sys
+import threading
+import time
+from typing import Optional
+
 import rtmidi
 import serial
 import serial.tools.list_ports
-from typing import Optional
-import threading
-import time
+
+# DearPyGUI is only needed when the UI is shown. Import lazily so the
+# headless path runs on machines without an X server / Wayland session.
+dpg = None  # type: ignore
 
 # MIDI Configuration
 MIDI_CHANNEL = 0  # Channel 1 (0-indexed)
 
 # SysEx protocol constants
 SYSEX_MANUFACTURER_ID = 0x7D  # Non-commercial/educational
-SYSEX_MSG_STATE_DUMP = 0x01   # Full state dump message
+SYSEX_MSG_STATE_DUMP  = 0x01  # Full state dump message
+SYSEX_MSG_RIG_HEALTH  = 0x02  # Slave heartbeat table (2 s interval)
+
+# HeartbeatCollector::Status enum (must match heartbeat_collector.h)
+SLOT_EMPTY  = 0
+SLOT_OK     = 1
+SLOT_NO_DMX = 2
+SLOT_STALE  = 3
+SLOT_LOST   = 4
+
+_STATUS_LABEL = {
+    SLOT_EMPTY: "EMPTY",
+    SLOT_OK: "OK   ",
+    SLOT_NO_DMX: "NO DMX",
+    SLOT_STALE: "STALE",
+    SLOT_LOST: "LOST ",
+}
+
+# ESP reset reason codes (esp_reset_reason_t)
+_RESET_REASON = {
+    0: "UNK", 1: "POR", 2: "EXT", 3: "SW",
+    4: "PANIC", 5: "INT_WDT", 6: "TASK_WDT", 7: "WDT",
+    8: "SLEEP", 9: "BROWNOUT", 10: "SDIO",
+}
 
 # CC Mappings from config.h
 CC_MASTER_BRIGHTNESS = 1
@@ -120,6 +153,24 @@ class LeslieLEDsController:
         self._cc_min_interval = 0.004  # seconds between CC transmissions per control
         self._active_scene: int = -1  # Currently active scene (-1 = none)
         self._sysex_buffer: list = []  # Buffer for incoming SysEx
+        # Parsed rig health: list of dicts with keys nid, status, fps, reset
+        self._rig_health: list = []
+        self._last_health_print: float = 0.0  # monotonic time of last terminal print
+        # When True, skip every DearPyGUI mutation (no UI is mounted).
+        # Set by main_headless(); all _safe_* DPG helpers no-op in that mode.
+        self.headless = False
+
+    def _dpg_set(self, tag: str, value):
+        if self.headless or dpg is None:
+            return
+        if dpg.does_item_exist(tag):
+            dpg.set_value(tag, value)
+
+    def _dpg_bind_theme(self, tag: str, theme):
+        if self.headless or dpg is None:
+            return
+        if dpg.does_item_exist(tag):
+            dpg.bind_item_theme(tag, theme)
         
     def setup_midi(self):
         """Initialize MIDI output and virtual input"""
@@ -145,14 +196,11 @@ class LeslieLEDsController:
             if msg:
                 midi_message, _ = msg
                 
-                # Parse CC messages to update GUI sliders
+                # Parse CC messages to update GUI sliders (no-op in headless)
                 if len(midi_message) == 3 and midi_message[0] == 0xB0 + MIDI_CHANNEL:
                     cc_number = midi_message[1]
                     cc_value = midi_message[2]
-                    # Update the GUI slider for this CC
-                    slider_id = f"cc_{cc_number}_slider"
-                    if dpg.does_item_exist(slider_id):
-                        dpg.set_value(slider_id, cc_value)
+                    self._dpg_set(f"cc_{cc_number}_slider", cc_value)
                 
                 # Forward to Serial MIDI if in serial mode, otherwise USB MIDI
                 if self.is_serial_mode:
@@ -228,13 +276,76 @@ class LeslieLEDsController:
             # Update active scene indicator
             scene = sysex_data[19] if len(sysex_data) > 19 else 127
             self._update_active_scene(scene if scene < MAX_SCENES else -1)
-    
+
+        elif msg_type == SYSEX_MSG_RIG_HEALTH and len(sysex_data) >= 4:
+            # Rig health table.  Format: F0 7D 02 <count> [N×6 bytes] F7
+            count = sysex_data[3]
+            slots = []
+            for i in range(count):
+                base = 4 + i * 6
+                if base + 5 >= len(sysex_data):
+                    break
+                slots.append({
+                    "nid":    (sysex_data[base], sysex_data[base+1], sysex_data[base+2]),
+                    "status": sysex_data[base+3],
+                    "fps":    sysex_data[base+4],
+                    "reset":  sysex_data[base+5],
+                })
+            self._rig_health = slots
+            self._update_rig_health_display()
+            if self.headless:
+                self._print_rig_health_if_due()
+
+    def _update_rig_health_display(self):
+        """Update rig-health text rows in the GUI. No-op in headless."""
+        if self.headless or dpg is None:
+            return
+        color_map = {
+            SLOT_OK:     (0,   200,   0, 255),
+            SLOT_NO_DMX: (220, 120,   0, 255),
+            SLOT_STALE:  (220, 180,   0, 255),
+            SLOT_LOST:   (220,  50,  50, 255),
+            SLOT_EMPTY:  (80,   80,  80, 150),
+        }
+        for i in range(8):
+            tag = f"hb_dot_{i}"
+            if not dpg.does_item_exist(tag):
+                continue
+            if i < len(self._rig_health):
+                slot = self._rig_health[i]
+                nid = slot["nid"]
+                nid_str = f"{nid[0]:02X}:{nid[1]:02X}:{nid[2]:02X}"
+                status_label = _STATUS_LABEL.get(slot["status"], "?    ").strip()
+                rst = _RESET_REASON.get(slot["reset"], str(slot["reset"]))
+                text = f"  {nid_str}  {status_label:<5}  {slot['fps']:3d}fps  {rst}"
+                col = color_map.get(slot["status"], color_map[SLOT_EMPTY])
+            else:
+                text = "  --:--:--"
+                col = color_map[SLOT_EMPTY]
+            dpg.configure_item(tag, default_value=text, color=col)
+
+    def _print_rig_health_if_due(self, interval: float = 5.0):
+        """Print a rig-health table to stdout in headless mode (throttled)."""
+        now = time.monotonic()
+        if now - self._last_health_print < interval:
+            return
+        self._last_health_print = now
+        if not self._rig_health:
+            print("[rig] no slaves heard yet")
+            return
+        print("[rig] NID        STATUS   FPS  RST")
+        for s in self._rig_health:
+            nid = s["nid"]
+            nid_str = f"{nid[0]:02X}:{nid[1]:02X}:{nid[2]:02X}"
+            status  = _STATUS_LABEL.get(s["status"], "?    ")
+            fps     = s["fps"]
+            rst     = _RESET_REASON.get(s["reset"], str(s["reset"]))
+            print(f"[rig]  {nid_str}  {status}  {fps:3d}fps  {rst}")
+
     def _update_slider_from_sysex(self, cc_number, value):
-        """Update a slider from SysEx data (value is 0-127)"""
-        slider_id = f"cc_{cc_number}_slider"
-        if dpg.does_item_exist(slider_id):
-            dpg.set_value(slider_id, value)
-        
+        """Update a slider from SysEx data (value is 0-127). No-op in headless."""
+        self._dpg_set(f"cc_{cc_number}_slider", value)
+
         # Also update combo boxes for mode/mirror/direction
         if cc_number == CC_ANIMATION_MODE:
             self._update_combo_from_value("anim_mode_combo", ANIMATION_MODES, value)
@@ -242,9 +353,11 @@ class LeslieLEDsController:
             self._update_combo_from_value("mirror_mode_combo", MIRROR_MODES, value)
         elif cc_number == CC_DIRECTION:
             self._update_combo_from_value("direction_mode_combo", DIRECTION_MODES, value)
-    
+
     def _update_combo_from_value(self, combo_id, modes_list, value):
-        """Update a combo box selection based on CC value"""
+        """Update a combo box selection based on CC value. No-op in headless."""
+        if self.headless or dpg is None:
+            return
         if not dpg.does_item_exist(combo_id):
             return
         # Find closest matching mode
@@ -256,20 +369,20 @@ class LeslieLEDsController:
                 best_diff = diff
                 best_match = name
         dpg.set_value(combo_id, best_match)
-    
+
     def _update_active_scene(self, scene_index):
-        """Update the active scene indicator on buttons"""
+        """Update the active scene indicator on buttons. No-op in headless."""
         self._active_scene = scene_index
-        # Update will be done by the global function if GUI exists
+        if self.headless or dpg is None:
+            return
         try:
             for i in range(MAX_SCENES):
-                if dpg.does_item_exist(f"scene_btn_{i}"):
-                    if self.scene_save_mode:
-                        dpg.bind_item_theme(f"scene_btn_{i}", "save_mode_theme")
-                    elif i == scene_index:
-                        dpg.bind_item_theme(f"scene_btn_{i}", "active_scene_theme")
-                    else:
-                        dpg.bind_item_theme(f"scene_btn_{i}", 0)
+                if self.scene_save_mode:
+                    self._dpg_bind_theme(f"scene_btn_{i}", "save_mode_theme")
+                elif i == scene_index:
+                    self._dpg_bind_theme(f"scene_btn_{i}", "active_scene_theme")
+                else:
+                    self._dpg_bind_theme(f"scene_btn_{i}", 0)
         except Exception:
             pass  # GUI not ready yet
         
@@ -758,31 +871,129 @@ def create_gui():
                                  tag=f"scene_btn_{i}")
             
             dpg.add_spacer(height=10)
-            dpg.add_button(label="RESET", callback=on_reset_button, 
+            dpg.add_button(label="RESET", callback=on_reset_button,
                           width=200, height=30)
-    
-    dpg.create_viewport(title="LeslieLEDs Controller", width=500, height=950)
+
+        dpg.add_separator()
+
+        # Rig health: one line per slave slot, colour-coded by heartbeat status.
+        # Updated by _update_rig_health_display() whenever a SYSEX_MSG_RIG_HEALTH
+        # arrives from the master (every 2 s).
+        with dpg.collapsing_header(label="Rig Health", default_open=True):
+            dpg.add_text("Slave nodes (live via SysEx, 2 s interval):",
+                         color=(120, 120, 120))
+            for i in range(8):
+                dpg.add_text("  --:--:--", tag=f"hb_dot_{i}",
+                             color=(80, 80, 80, 150))
+
+    dpg.create_viewport(title="LeslieLEDs Controller", width=500, height=1050)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
 
 
-def main():
-    """Main entry point"""
+def _headless_select_port(prefer_label: Optional[str]) -> bool:
+    """Pick a hardware MIDI/serial port for headless mode.
+
+    With --port: only attempt that label (substring match against the
+    formatted port list). Without: try the same auto-select keywords
+    the GUI uses ("midi2dmxnow", "leslieleds", "m5stack", then
+    "USB Single Serial"). Returns True on success.
+    """
+    ports = controller.get_available_ports()
+    labelled = []
+    for port_info in ports:
+        if port_info[0] == "MIDI":
+            labelled.append(("MIDI", port_info[1], f"MIDI: {port_info[1]}"))
+        elif port_info[0] == "SERIAL":
+            labelled.append(("SERIAL", port_info[1], port_info[2]))
+
+    candidates = []
+    if prefer_label:
+        needle = prefer_label.lower()
+        candidates = [c for c in labelled if needle in c[2].lower()]
+    else:
+        for keyword in ("midi2dmxnow", "leslieleds", "m5stack"):
+            candidates.extend([c for c in labelled if keyword in c[2].lower()])
+        candidates.extend([c for c in labelled if "USB Single Serial" in c[2]])
+
+    for port_type, port_id, label in candidates:
+        if controller.connect_port(port_type, port_id):
+            print(f"[LeslieLEDs] connected to {label}")
+            return True
+
+    return False
+
+
+def main_headless(prefer_port: Optional[str]) -> int:
+    """Headless bridge: virtual MIDI port forwarded to hardware, no UI.
+
+    Suitable for production rigs driven from a DAW where the GUI would
+    only get in the way (and might not even start without a display).
+    """
+    controller.headless = True
+    controller.setup_midi()
+    print("[LeslieLEDs] headless mode")
+    print("[LeslieLEDs] virtual port name: LeslieCTRLs")
+
+    if not _headless_select_port(prefer_port):
+        print("[LeslieLEDs] WARN: no hardware port matched; messages will be dropped.")
+        print("[LeslieLEDs]       available ports:")
+        for port_info in controller.get_available_ports():
+            if port_info[0] == "MIDI":
+                print(f"[LeslieLEDs]         MIDI: {port_info[1]}")
+            else:
+                print(f"[LeslieLEDs]         {port_info[2]}")
+
+    stop = threading.Event()
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    print("[LeslieLEDs] running. Ctrl-C to stop.")
+    try:
+        while not stop.is_set():
+            stop.wait(timeout=0.5)
+    finally:
+        controller.cleanup()
+        print("[LeslieLEDs] stopped.")
+    return 0
+
+
+def main_gui() -> int:
+    """Main entry point — desktop UI."""
+    global dpg
+    import dearpygui.dearpygui as _dpg
+    dpg = _dpg
+
     controller.setup_midi()
     create_gui()
-    
+
     # Initial port refresh
     refresh_ports()
-    
+
     # Main loop
     while dpg.is_dearpygui_running():
         dpg.render_dearpygui_frame()
-    
+
     # Cleanup
     controller.cleanup()
     dpg.destroy_context()
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="LeslieLEDs MIDI bridge / controller")
+    parser.add_argument("--headless", action="store_true",
+                        help="run without GUI; just bridge LeslieCTRLs virtual MIDI to hardware")
+    parser.add_argument("--port", default=None,
+                        help="(headless) substring of the port label to connect to; "
+                             "if omitted, auto-selects a Midi2DMXnow / M5Stack / "
+                             "USB Single Serial device")
+    args = parser.parse_args()
+
+    if args.headless:
+        return main_headless(args.port)
+    return main_gui()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

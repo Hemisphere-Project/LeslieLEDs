@@ -3,18 +3,17 @@
 DisplayHandler::DisplayHandler()
     : _ledEngine(nullptr)
     , _dmxState(nullptr)
-    , _logIndex(0)
+    , _heartbeats(nullptr)
     , _lastUpdate(0)
     , _sceneNotificationEnd(0)
     , _sceneNotificationNumber(0)
     , _sceneNotificationIsSave(false)
     , _needsFullRedraw(true)
     , _currentScene(-1)
-    , _lastPreviewUpdate(0) {
-    for (int i = 0; i < MIDI_LOG_LINES; i++) {
-        _logEntries[i].text[0] = '\0';
-        _logEntries[i].timestamp = 0;
-    }
+    , _lastPreviewUpdate(0)
+    , _radioTotalFailed(0)
+    , _radioConsecutiveFailures(0)
+    , _radioAlertUntil(0) {
 }
 
 void DisplayHandler::begin() {
@@ -35,6 +34,16 @@ void DisplayHandler::setLedEngine(LedEngineLib::LedEngine* engine) {
 
 void DisplayHandler::setDMXState(DMXState* state) {
     _dmxState = state;
+}
+
+void DisplayHandler::setRadioStatus(uint32_t totalFailed, uint16_t consecutiveFailures) {
+#if DISPLAY_ENABLED
+    if (totalFailed > _radioTotalFailed || consecutiveFailures > 0) {
+        _radioAlertUntil = millis() + 8000;
+    }
+#endif
+    _radioTotalFailed = totalFailed;
+    _radioConsecutiveFailures = consecutiveFailures;
 }
 
 void DisplayHandler::update() {
@@ -62,14 +71,10 @@ void DisplayHandler::update() {
 }
 
 void DisplayHandler::logMessage(const char* message) {
-    // Keep log internally for debug purposes
-    strncpy(_logEntries[_logIndex].text, message, 31);
-    _logEntries[_logIndex].text[31] = '\0';
-    _logEntries[_logIndex].timestamp = millis();
-    _logIndex = (_logIndex + 1) % MIDI_LOG_LINES;
-    
 #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
     Serial.printf("[LOG] %s\n", message);
+#else
+    (void)message;
 #endif
 }
 
@@ -102,13 +107,86 @@ void DisplayHandler::handleButtonPress() {
 void DisplayHandler::drawPreview() {
 #if DISPLAY_ENABLED
     if (!_ledEngine) return;
-    
+
     _previewRenderer.draw(M5.Display, _ledEngine, _needsFullRedraw);
-    
+
     // Draw scene indicator on top of preview
     drawSceneIndicator();
-    
+
+    // Sender-side ESP-NOW TX diagnostics for USB-MIDI mode where serial
+    // is unavailable.
+    drawRadioStatus();
+
+    // Rig health dot row (slaves heard recently, one coloured dot each)
+    drawHeartbeatDots();
+
     _needsFullRedraw = false;
+#endif
+}
+
+void DisplayHandler::drawRadioStatus() {
+#if DISPLAY_ENABLED
+    const int16_t w = M5.Display.width();
+    const int16_t h = M5.Display.height();
+    const int16_t boxW = 42;
+    const int16_t boxH = 10;
+    const int16_t x = w - boxW - 2;
+    const int16_t y = h - 11;
+    const uint32_t now = millis();
+
+    uint16_t bg = M5.Display.color565(0, 96, 0);
+    char label[8] = "TX OK";
+
+    if (_radioConsecutiveFailures > 0) {
+        bg = M5.Display.color565(180, 20, 20);
+        snprintf(label, sizeof(label), "TXx%u", _radioConsecutiveFailures);
+    } else if (_radioTotalFailed > 0 && now < _radioAlertUntil) {
+        bg = M5.Display.color565(180, 110, 0);
+        snprintf(label, sizeof(label), "TX!%lu", (unsigned long)(_radioTotalFailed % 1000));
+    }
+
+    M5.Display.fillRect(x, y, boxW, boxH, bg);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(TFT_WHITE, bg);
+    M5.Display.setCursor(x + 3, y + 1);
+    M5.Display.print(label);
+#endif
+}
+
+void DisplayHandler::drawHeartbeatDots() {
+#if DISPLAY_ENABLED
+    if (!_heartbeats) return;
+
+    // Position: just above the "LED count / FPS" footer so the status row
+    // doesn't collide with the title bar or scene indicator.
+    const int16_t w = M5.Display.width();
+    const int16_t h = M5.Display.height();
+    const int16_t y = h - 20;
+    const int16_t dotW = 8;
+    const int16_t dotH = 4;
+    const int16_t gap = 2;
+    const uint8_t maxDots = 5;
+    const int16_t rowW = (maxDots * dotW) + ((maxDots - 1) * gap);
+    const int16_t x = w - rowW - 2;
+
+    M5.Display.fillRect(x - 1, y - 1, rowW + 2, dotH + 2, COLOR_BG);
+
+    uint32_t now = millis();
+    int16_t drawX = x;
+    for (uint8_t i = 0; i < maxDots; i++) {
+        HeartbeatCollector::Status st = _heartbeats->statusOf(i, now);
+        uint16_t colour;
+        switch (st) {
+            case HeartbeatCollector::OK:     colour = M5.Display.color565(0,   200, 0);   break;
+            case HeartbeatCollector::NO_DMX: colour = M5.Display.color565(220, 120, 0);   break;
+            case HeartbeatCollector::STALE:  colour = M5.Display.color565(220, 180, 0);   break;
+            case HeartbeatCollector::LOST:   colour = M5.Display.color565(220, 30,  30);  break;
+            case HeartbeatCollector::EMPTY:
+            default:                         colour = M5.Display.color565(40,  40,  40);  break;
+        }
+        M5.Display.fillRect(drawX, y, dotW, dotH, colour);
+        drawX += dotW + gap;
+    }
 #endif
 }
 
@@ -136,20 +214,24 @@ void DisplayHandler::drawSceneNotification() {
 #if DISPLAY_ENABLED
     int16_t w = M5.Display.width();
     int16_t h = M5.Display.height();
+    uint8_t sceneNumber = _sceneNotificationNumber + 1;
 
     uint16_t bgColor = _sceneNotificationIsSave ?
         M5.Display.color565(0, 80, 0) :
         M5.Display.color565(0, 0, 80);
 
     M5.Display.fillScreen(bgColor);
-    M5.Display.setTextSize(3);
+    uint8_t sceneTextSize = (sceneNumber >= 10) ? 2 : 3;
+    int16_t sceneCharWidth = (sceneTextSize == 3) ? 18 : 12;
+
+    M5.Display.setTextSize(sceneTextSize);
     M5.Display.setTextColor(TFT_WHITE, bgColor);
 
     char sceneText[16];
-    snprintf(sceneText, sizeof(sceneText), "SCENE %d", _sceneNotificationNumber + 1);
-    int16_t textWidth = strlen(sceneText) * 18;
+    snprintf(sceneText, sizeof(sceneText), "SCENE %d", sceneNumber);
+    int16_t textWidth = strlen(sceneText) * sceneCharWidth;
     int16_t x = (w - textWidth) / 2;
-    int16_t y = (h / 2) - 24;
+    int16_t y = (h / 2) - ((sceneTextSize == 3) ? 24 : 18);
     M5.Display.setCursor(x, y);
     M5.Display.println(sceneText);
 
