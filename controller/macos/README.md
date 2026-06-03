@@ -18,6 +18,8 @@ This folder contains the no-Terminal launcher for the controller GUI:
 2. Add that app to the Dock or make a Finder alias to it. Do not move the app bundle out of the repo, because it resolves `controller/launcher.py` by relative path.
 3. Use `controller/LeslieLEDs-Debug.command` whenever you want startup logs and stdout/stderr in Terminal.
 
+Do not keep the repo checkout under `~/Desktop`, `~/Documents`, or `~/Downloads` if you want Finder/Dock launch to work reliably. macOS privacy controls can allow Terminal access there while still blocking the app-launched `python3` process from opening `controller/launcher.py`.
+
 ## If macOS says "Permission denied"
 
 Run this once in Terminal from the repo checkout:
@@ -52,5 +54,6 @@ cd controller/macos
 - Finder launches often have a minimal `PATH`, so the wrapper adds the common Homebrew paths (`/opt/homebrew/bin` and `/usr/local/bin`) before looking for Python, `git`, or `uv`.
 - The hidden launcher writes detached-run logs to `~/Library/Logs/LeslieLEDs/controller.log`.
 - The app wrapper itself logs to `~/Library/Logs/LeslieLEDs/app-wrapper.log`, which is the first place to check if Finder or `open` appears to do nothing.
+- If `app-wrapper.log` shows `Operation not permitted` while opening `controller/launcher.py`, move the repo to a non-protected path such as `~/Code/LeslieLEDs` and relaunch the app.
 - The focus-on-relaunch path uses `System Events` on macOS. On first use, macOS may ask for permission before allowing the running window to come to the front.
 - The app icon is generated from `controller/macos/generate_icon.py`; rerun it if you want to tweak the pixel art or regenerate `LeslieLEDs.icns`.
