@@ -8,6 +8,8 @@
     <string>LeslieLEDs</string>
     <key>CFBundleExecutable</key>
     <string>leslieleds-launcher</string>
+    <key>CFBundleIconFile</key>
+    <string>LeslieLEDs.icns</string>
     <key>CFBundleIdentifier</key>
     <string>com.leslieleds.launcher</string>
     <key>CFBundleInfoDictionaryVersion</key>
