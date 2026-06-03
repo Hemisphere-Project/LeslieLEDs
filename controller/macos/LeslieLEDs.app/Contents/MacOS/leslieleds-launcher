@@ -18,6 +18,10 @@ show_alert() {
     fi
 }
 
+show_repo_access_hint() {
+    show_alert "macOS blocked LeslieLEDs.app from reading this repo. Move the LeslieLEDs checkout out of Desktop/Documents/Downloads, for example to ~/Code/LeslieLEDs, then launch again."
+}
+
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 CONTROLLER_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../../.." && pwd)
 
@@ -45,6 +49,20 @@ else
 fi
 
 echo "[wrapper] python: $PYTHON_BIN"
+echo "[wrapper] checking bootstrap readability via python"
+if ! "$PYTHON_BIN" -c 'import pathlib, sys; pathlib.Path(sys.argv[1]).read_bytes()' "$CONTROLLER_DIR/launcher.py"; then
+    echo "[wrapper] ERROR: python cannot read launcher.py"
+    case "$CONTROLLER_DIR" in
+        "$HOME"/Desktop/*|"$HOME"/Documents/*|"$HOME"/Downloads/*)
+            echo "[wrapper] Likely macOS privacy protection on Desktop/Documents/Downloads"
+            show_repo_access_hint
+            ;;
+        *)
+            show_alert "LeslieLEDs could not read controller/launcher.py. See $WRAPPER_LOG for details."
+            ;;
+    esac
+    exit 1
+fi
 echo "[wrapper] launching bootstrap in detached mode"
 "$PYTHON_BIN" "$CONTROLLER_DIR/launcher.py" --detached "$@"
 ret=$?
