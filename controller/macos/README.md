@@ -29,6 +29,24 @@ cd controller/macos
 
 That script reapplies the executable bit to the app launcher, clears the common quarantine attribute from the app bundle, and refreshes Finder's view of the bundle.
 
+Do not drag `LeslieLEDs.app` itself into Terminal and hit Return. A `.app` is a directory bundle, so the shell will report `permission denied` if you try to execute the bundle path directly.
+
+Use one of these instead:
+
+```bash
+open "controller/macos/LeslieLEDs.app"
+"controller/macos/LeslieLEDs.app/Contents/MacOS/leslieleds-launcher"
+"controller/LeslieLEDs-Debug.command"
+```
+
+If you want a one-shot diagnosis on the Mac:
+
+```bash
+cd controller/macos
+./diagnose_macos_app.sh
+./diagnose_macos_app.sh --open
+```
+
 ## Notes
 
 - Finder launches often have a minimal `PATH`, so the wrapper adds the common Homebrew paths (`/opt/homebrew/bin` and `/usr/local/bin`) before looking for Python, `git`, or `uv`.
