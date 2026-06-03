@@ -310,15 +310,9 @@ void MIDIHandler::sendSceneBankDumpSysEx() {
         uint8_t value = _sceneBankBuffer[i];
         _midi.write((value >> 4) & 0x0F);
         _midi.write(value & 0x0F);
-        // Yield to the USB task every 64 raw bytes so the TX FIFO
-        // does not overflow silently on large SysEx payloads.
-        if ((i & 0x3F) == 0x3F) {
-            delay(1);
-        }
     }
 
     _midi.write(0xF7);
-    delay(1); // ensure the final packet is flushed before returning
 }
 
 void MIDIHandler::sendSceneBankStatusSysEx(uint8_t status, uint8_t detail) {

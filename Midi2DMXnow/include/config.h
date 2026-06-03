@@ -106,7 +106,7 @@
 // ========================================
 // Scene Configuration
 // ========================================
-#define MAX_SCENES 64  // Storage capacity (future-proof)
+#define MAX_SCENES 20  // Scene storage capacity (matches controller GUI)
 #define VISIBLE_SCENES 20  // Currently exposed via MIDI notes 36-55
 
 // ========================================
