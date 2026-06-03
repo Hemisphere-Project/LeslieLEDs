@@ -561,9 +561,27 @@ class LeslieLEDsController:
             pass  # GUI not ready yet
 
     def _default_scene_bank_path(self) -> str:
-        documents_dir = Path.home() / "Documents"
-        base_dir = documents_dir if documents_dir.exists() else Path.home()
-        return str(base_dir / "leslie_scene_bank.json")
+        repo_root = Path(__file__).parent.parent
+        presets_dir = repo_root / "presets"
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        return str(presets_dir / f"{date_str}-LeslieLEDs-presets.json")
+
+    def _next_scene_bank_path(self) -> str:
+        """Return a non-conflicting dated preset path, adding -2/-3/… if needed."""
+        repo_root = Path(__file__).parent.parent
+        presets_dir = repo_root / "presets"
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        candidate = presets_dir / f"{date_str}-LeslieLEDs-presets.json"
+        if not candidate.exists():
+            return str(candidate)
+        counter = 2
+        while True:
+            candidate = presets_dir / f"{date_str}-LeslieLEDs-presets-{counter}.json"
+            if not candidate.exists():
+                return str(candidate)
+            counter += 1
 
     def _update_scene_bank_status(self, message: str, color=(150, 150, 150)):
         if not self.headless:
@@ -744,8 +762,18 @@ class LeslieLEDsController:
             self._update_scene_bank_status(f"Could not write scene bank file: {exc}", (255, 100, 100))
             return
 
+        # Verify the file is present and valid before reporting success
+        try:
+            saved = json.loads(target.read_text(encoding="utf-8"))
+            if saved.get("file_type") != SCENE_BANK_FILE_TYPE:
+                raise ValueError("file_type mismatch")
+        except Exception as exc:
+            self._clear_scene_bank_pending()
+            self._update_scene_bank_status(f"File written but failed verification: {exc}", (255, 140, 100))
+            return
+
         self._clear_scene_bank_pending()
-        self._update_scene_bank_status(f"Saved full scene bank to {target}", (100, 220, 120))
+        self._update_scene_bank_status(f"Saved & verified: {target.name}", (100, 220, 120))
 
     def _handle_scene_bank_status(self, sysex_data):
         status_code = sysex_data[3]
@@ -1051,63 +1079,50 @@ def on_scene_button(sender, app_data, user_data):
 
 
 def on_dump_scene_bank(sender=None, app_data=None, user_data=None):
-    """Pick a save path then dump the full scene bank from the device."""
-    _select_scene_bank_path(save_dialog=True)
-    file_path = dpg.get_value("scene_bank_path") if dpg is not None else ""
-    if file_path:
-        controller.request_scene_bank_dump(file_path)
+    """Dump the full scene bank to a new auto-named dated file (no dialog)."""
+    file_path = controller._next_scene_bank_path()
+    controller.request_scene_bank_dump(file_path)
 
 
 def on_load_scene_bank(sender=None, app_data=None, user_data=None):
     """Pick an existing scene-bank file then push it to the device."""
-    _select_scene_bank_path(save_dialog=False)
-    file_path = dpg.get_value("scene_bank_path") if dpg is not None else ""
-    if file_path:
-        controller.load_scene_bank_from_file(file_path)
+    _select_scene_bank_path(on_confirm=controller.load_scene_bank_from_file)
 
 
-def _select_scene_bank_path(save_dialog: bool):
-    if dpg is None or not dpg.does_item_exist("scene_bank_path"):
+def _select_scene_bank_path(on_confirm=None):
+    """Open a DearPyGUI file dialog to pick a backup file to load."""
+    if dpg is None:
         return
 
-    current_value = dpg.get_value("scene_bank_path") or controller._default_scene_bank_path()
-    current_path = Path(str(current_value)).expanduser()
-    initial_dir = current_path.parent if current_path.parent.exists() else Path.home()
+    dialog_tag = "_sb_file_dialog"
+    if dpg.does_item_exist(dialog_tag):
+        dpg.delete_item(dialog_tag)
 
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception as exc:
-        controller._update_scene_bank_status(f"File dialog is unavailable: {exc}", (255, 100, 100))
-        return
+    default_path = controller._default_scene_bank_path()
+    default_file = Path(default_path)
+    initial_dir = str(default_file.parent)
 
-    root = tk.Tk()
-    root.withdraw()
-    root.update()
-    try:
-        dialog_args = {
-            "initialdir": str(initial_dir),
-            "filetypes": [("JSON files", "*.json"), ("All files", "*.*")],
-            "parent": root,
-        }
-        if save_dialog:
-            selected_path = filedialog.asksaveasfilename(
-                title="Save Scene Bank As",
-                initialfile=current_path.name,
-                defaultextension=".json",
-                **dialog_args,
-            )
-        else:
-            selected_path = filedialog.askopenfilename(
-                title="Open Scene Bank",
-                initialfile=current_path.name,
-                **dialog_args,
-            )
-    finally:
-        root.destroy()
+    def _on_selected(sender, app_data):
+        path = app_data.get("file_path_name", "") if isinstance(app_data, dict) else ""
+        if not path:
+            return
+        if dpg.does_item_exist("scene_bank_path"):
+            dpg.set_value("scene_bank_path", path)
+        if on_confirm:
+            on_confirm(path)
 
-    if selected_path:
-        dpg.set_value("scene_bank_path", selected_path)
+    with dpg.file_dialog(
+        directory_selector=False,
+        show=True,
+        callback=_on_selected,
+        tag=dialog_tag,
+        width=480,
+        height=380,
+        default_path=initial_dir,
+        label="Load a Backup",
+    ):
+        dpg.add_file_extension(".json", color=(100, 255, 100, 255))
+        dpg.add_file_extension(".*")
 
 
 
@@ -1348,12 +1363,13 @@ def create_gui():
             
             dpg.add_spacer(height=10)
             dpg.add_text("Scene Bank Backup:")
+            # Hidden path field – updated programmatically by the file dialog
             dpg.add_input_text(tag="scene_bank_path",
                                default_value=controller._default_scene_bank_path(),
-                               width=420, readonly=True)
+                               width=420, show=False)
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Save As & Dump...", callback=on_dump_scene_bank, width=200)
-                dpg.add_button(label="Open & Load...", callback=on_load_scene_bank, width=200)
+                dpg.add_button(label="Backup Presets", callback=on_dump_scene_bank, width=200)
+                dpg.add_button(label="Load a Backup...", callback=on_load_scene_bank, width=200)
             dpg.add_text("USB MIDI only. Saves/restores the full device preset bank as one host file.",
                          color=(120, 120, 120), wrap=420)
             dpg.add_text("", tag="scene_bank_status_text", color=(150, 150, 150), wrap=420)

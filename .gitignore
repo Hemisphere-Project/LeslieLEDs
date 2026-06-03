@@ -1,3 +1,4 @@
 .pio/
 .vscode/
 shared_libs/
+presets/*
