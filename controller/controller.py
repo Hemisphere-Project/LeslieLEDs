@@ -51,6 +51,8 @@ SCENE_BANK_WIRE_VERSION = 1
 SCENE_BANK_SCENE_SIZE = 16
 SCENE_BANK_FILE_VERSION = 1
 SCENE_BANK_FILE_TYPE = "leslieleds-scene-bank"
+SCENE_BANK_DUMP_TIMEOUT = 15.0
+SCENE_BANK_LOAD_TIMEOUT = 10.0
 
 _SCENE_BANK_STATUS_TEXT = {
     SCENE_BANK_STATUS_OK: "Scene bank applied.",
@@ -551,7 +553,9 @@ class LeslieLEDsController:
             pass  # GUI not ready yet
 
     def _default_scene_bank_path(self) -> str:
-        return str(Path.cwd() / "leslie_scene_bank.json")
+        documents_dir = Path.home() / "Documents"
+        base_dir = documents_dir if documents_dir.exists() else Path.home()
+        return str(base_dir / "leslie_scene_bank.json")
 
     def _update_scene_bank_status(self, message: str, color=(150, 150, 150)):
         if not self.headless:
@@ -620,7 +624,7 @@ class LeslieLEDsController:
             return
         self._pending_scene_bank_save_path = str(target)
         self._pending_scene_bank_operation = "dump"
-        self._pending_scene_bank_deadline = time.monotonic() + 5.0
+        self._pending_scene_bank_deadline = time.monotonic() + SCENE_BANK_DUMP_TIMEOUT
         self._update_scene_bank_status(f"Requesting scene bank into {target} ...", (120, 180, 255))
 
     def load_scene_bank_from_file(self, file_path: str):
@@ -679,7 +683,7 @@ class LeslieLEDsController:
             return
 
         self._pending_scene_bank_operation = "load"
-        self._pending_scene_bank_deadline = time.monotonic() + 5.0
+        self._pending_scene_bank_deadline = time.monotonic() + SCENE_BANK_LOAD_TIMEOUT
         self._update_scene_bank_status(f"Uploading scene bank from {target} ...", (120, 180, 255))
 
     def _handle_scene_bank_dump(self, sysex_data):
@@ -768,7 +772,13 @@ class LeslieLEDsController:
 
         operation = self._pending_scene_bank_operation
         self._clear_scene_bank_pending()
-        self._update_scene_bank_status(f"Scene bank {operation} timed out.", (255, 140, 100))
+        if operation == "dump":
+            message = (
+                "Scene bank dump timed out. Verify USB MIDI input is open and that the device is sending SysEx back."
+            )
+        else:
+            message = "Scene bank load timed out waiting for the device acknowledgement."
+        self._update_scene_bank_status(message, (255, 140, 100))
         
     def get_available_ports(self):
         """Get list of available MIDI output ports and serial ports"""
@@ -1044,6 +1054,60 @@ def on_load_scene_bank(sender=None, app_data=None, user_data=None):
     controller.load_scene_bank_from_file(file_path)
 
 
+def _select_scene_bank_path(save_dialog: bool):
+    if dpg is None or not dpg.does_item_exist("scene_bank_path"):
+        return
+
+    current_value = dpg.get_value("scene_bank_path") or controller._default_scene_bank_path()
+    current_path = Path(str(current_value)).expanduser()
+    initial_dir = current_path.parent if current_path.parent.exists() else Path.home()
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        controller._update_scene_bank_status(f"File dialog is unavailable: {exc}", (255, 100, 100))
+        return
+
+    root = tk.Tk()
+    root.withdraw()
+    root.update()
+    try:
+        dialog_args = {
+            "initialdir": str(initial_dir),
+            "filetypes": [("JSON files", "*.json"), ("All files", "*.*")],
+            "parent": root,
+        }
+        if save_dialog:
+            selected_path = filedialog.asksaveasfilename(
+                title="Save Scene Bank As",
+                initialfile=current_path.name,
+                defaultextension=".json",
+                **dialog_args,
+            )
+        else:
+            selected_path = filedialog.askopenfilename(
+                title="Open Scene Bank",
+                initialfile=current_path.name,
+                **dialog_args,
+            )
+    finally:
+        root.destroy()
+
+    if selected_path:
+        dpg.set_value("scene_bank_path", selected_path)
+
+
+def on_browse_scene_bank_save(sender=None, app_data=None, user_data=None):
+    """Pick a target path for dumping the full scene bank."""
+    _select_scene_bank_path(save_dialog=True)
+
+
+def on_browse_scene_bank_load(sender=None, app_data=None, user_data=None):
+    """Pick an existing scene-bank file to upload to the device."""
+    _select_scene_bank_path(save_dialog=False)
+
+
 def on_reset_button():
     """Reset all sliders to default values and send to MIDI receiver"""
     # Map CC numbers to their slider tags
@@ -1223,6 +1287,18 @@ def create_gui():
                               callback=on_cc_slider, user_data=CC_COLOR_B_WHITE, width=300)
         
         dpg.add_separator()
+
+        # Rig health: one line per slave slot, colour-coded by heartbeat status.
+        # Placed above Scenes so collapsing it does not leave the last section
+        # scrolled out of view at the bottom of the primary window.
+        with dpg.collapsing_header(label="Rig Health", default_open=True):
+            dpg.add_text("Slave nodes (live via SysEx, 2 s interval):",
+                         color=(120, 120, 120))
+            for i in range(8):
+                dpg.add_text("  --:--:--", tag=f"hb_dot_{i}",
+                             color=(80, 80, 80, 150))
+
+        dpg.add_separator()
         
         # Scene Management
         with dpg.collapsing_header(label="Scenes", default_open=True):
@@ -1269,9 +1345,12 @@ def create_gui():
             
             dpg.add_spacer(height=10)
             dpg.add_text("Scene Bank Backup:")
-            dpg.add_input_text(tag="scene_bank_path",
-                               default_value=controller._default_scene_bank_path(),
-                               width=360)
+            with dpg.group(horizontal=True):
+                dpg.add_input_text(tag="scene_bank_path",
+                                   default_value=controller._default_scene_bank_path(),
+                                   width=210)
+                dpg.add_button(label="Save As...", callback=on_browse_scene_bank_save, width=90)
+                dpg.add_button(label="Open...", callback=on_browse_scene_bank_load, width=90)
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Dump Bank", callback=on_dump_scene_bank, width=110)
                 dpg.add_button(label="Load Bank", callback=on_load_scene_bank, width=110)
@@ -1282,19 +1361,6 @@ def create_gui():
             dpg.add_spacer(height=10)
             dpg.add_button(label="RESET", callback=on_reset_button,
                           width=200, height=30)
-
-        dpg.add_separator()
-
-        # Rig health: one line per slave slot, colour-coded by heartbeat status.
-        # Updated by _update_rig_health_display() whenever a SYSEX_MSG_RIG_HEALTH
-        # arrives from the master (every 2 s).
-        with dpg.collapsing_header(label="Rig Health", default_open=True):
-            dpg.add_text("Slave nodes (live via SysEx, 2 s interval):",
-                         color=(120, 120, 120))
-            for i in range(8):
-                dpg.add_text("  --:--:--", tag=f"hb_dot_{i}",
-                             color=(80, 80, 80, 150))
-
     dpg.create_viewport(title="LeslieLEDs Controller", width=500, height=1050)
     dpg.setup_dearpygui()
     dpg.show_viewport()
