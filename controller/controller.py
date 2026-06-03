@@ -11,7 +11,10 @@ import argparse
 import json
 import os
 import signal
+import socket
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -160,6 +163,132 @@ DIRECTION_MODES = [
     ("Ping Pong", 80),
     ("Random", 112)
 ]
+
+
+def _instance_socket_path() -> Path:
+    uid = getattr(os, "getuid", lambda: "nouid")()
+    return Path(tempfile.gettempdir()) / f"leslieleds_controller_gui_{uid}.sock"
+
+
+class GuiSingleInstance:
+    def __init__(self):
+        self.socket_path = _instance_socket_path()
+        self._server: Optional[socket.socket] = None
+        self._thread: Optional[threading.Thread] = None
+        self._activate_requested = threading.Event()
+
+    @classmethod
+    def activate_existing_instance(cls) -> bool:
+        if not hasattr(socket, "AF_UNIX"):
+            return False
+
+        socket_path = _instance_socket_path()
+        if not socket_path.exists():
+            return False
+
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(0.5)
+                client.connect(str(socket_path))
+                client.sendall(b"activate\n")
+            return True
+        except OSError:
+            try:
+                socket_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+            return False
+
+    def start(self) -> bool:
+        if not hasattr(socket, "AF_UNIX"):
+            return True
+
+        try:
+            self.socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+        self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            self._server.bind(str(self.socket_path))
+        except OSError:
+            self._server.close()
+            self._server = None
+            return False
+        self._server.listen(1)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+        return True
+
+    def _serve(self):
+        if self._server is None:
+            return
+
+        while True:
+            try:
+                conn, _ = self._server.accept()
+            except OSError:
+                return
+
+            with conn:
+                try:
+                    payload = conn.recv(64)
+                except OSError:
+                    continue
+
+            if b"activate" in payload.lower():
+                self._activate_requested.set()
+
+    def consume_activate_request(self) -> bool:
+        if not self._activate_requested.is_set():
+            return False
+        self._activate_requested.clear()
+        return True
+
+    def close(self):
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+            self._server = None
+
+        try:
+            self.socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def _activate_gui_window():
+    if dpg is not None:
+        try:
+            dpg.show_viewport()
+        except Exception:
+            pass
+
+    if sys.platform != "darwin":
+        return
+
+    script = (
+        'tell application "System Events" '
+        f'to set frontmost of the first process whose unix id is {os.getpid()} to true'
+    )
+    try:
+        subprocess.run(
+            ["/usr/bin/osascript", "-e", script],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except Exception:
+        pass
 
 
 class LeslieLEDsController:
@@ -1244,21 +1373,38 @@ def main_gui() -> int:
     import dearpygui.dearpygui as _dpg
     dpg = _dpg
 
-    controller.setup_midi()
-    create_gui()
+    if GuiSingleInstance.activate_existing_instance():
+        return 0
 
-    # Initial port refresh
-    refresh_ports()
+    single_instance = GuiSingleInstance()
+    if not single_instance.start():
+        if GuiSingleInstance.activate_existing_instance():
+            return 0
+        print("[LeslieLEDs] another GUI instance is starting; exiting.")
+        return 0
+    context_created = False
 
-    # Main loop
-    while dpg.is_dearpygui_running():
-        controller.poll_pending_operations()
-        dpg.render_dearpygui_frame()
+    try:
+        controller.setup_midi()
+        create_gui()
+        context_created = True
 
-    # Cleanup
-    controller.cleanup()
-    dpg.destroy_context()
-    return 0
+        # Initial port refresh
+        refresh_ports()
+
+        # Main loop
+        while dpg.is_dearpygui_running():
+            if single_instance.consume_activate_request():
+                _activate_gui_window()
+            controller.poll_pending_operations()
+            dpg.render_dearpygui_frame()
+
+        return 0
+    finally:
+        controller.cleanup()
+        single_instance.close()
+        if context_created:
+            dpg.destroy_context()
 
 
 def main():

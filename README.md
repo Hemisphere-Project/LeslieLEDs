@@ -61,6 +61,7 @@ Legacy references such as `_legacy/Midi2Strip/` remain untouched for context onl
    ./run.sh --headless --port leslie   # explicit port substring match
    ```
    Either way the bridge exposes a virtual MIDI input named **LeslieCTRLs** that your DAW can route to.
+   On macOS, [controller/macos/README.md](controller/macos/README.md) covers the hidden Finder/Dock launcher and the Terminal-based debug launcher.
 6. **Verify boot sweep + sync**
    - Receivers first, sender last. Every device flashes R→G→B→W before showing "Waiting for DMX".
    - On Atom Lite slaves, the onboard LED goes dim-red during boot, dim-green once setup completes, slow red blink if the DMX link drops, slow purple breathing if the previous reset was a brownout (skips the RGBW sweep in that case).
@@ -85,6 +86,6 @@ Legacy references such as `_legacy/Midi2Strip/` remain untouched for context onl
 - Both PlatformIO projects add `../LEDengine`, `../shared` (for `leslie_protocol.h`) and `../shared_libs` via `lib_extra_dirs`. `shared_libs/` is gitignored — clone `ESPNowDMX` and `ESPNowMeshClock` into it manually (see SETUP_CHECKLIST.md).
 - When patching ESPNowDMX or MeshClock locally, delete `.pio/libdeps/<env>/ESPNowDMX*` so PlatformIO reuses the sibling checkout.
 - Use `pio run -t clean` after switching hardware targets to avoid stale build flags.
-- The Python controller pins dependencies in `pyproject.toml` and `requirements.txt`; run `./run.sh` to create a `.venv` with `uv` and install everything.
+- The Python controller bootstrap lives in `controller/launcher.py`; `./run.sh` uses it to auto-update a clean git checkout, refresh the `.venv` only when dependency inputs change, and then launch the GUI or headless bridge.
 
 Happy modulating! If something feels out-of-date, start with the checklist and MIDI guide—both now point to the latest boot/test behavior.
