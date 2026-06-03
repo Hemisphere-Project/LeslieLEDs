@@ -403,12 +403,12 @@ class LeslieLEDsController:
         """Process incoming MIDI message from device"""
         if not midi_message:
             return
-        
+
         # Check for SysEx message (starts with F0, ends with F7)
         if midi_message[0] == 0xF0:
-            # Full SysEx message
+            # Full SysEx message (may contain multiple coalesced messages)
             if midi_message[-1] == 0xF7:
-                self._handle_sysex(midi_message)
+                self._dispatch_sysex_messages(midi_message)
             else:
                 # Start of multi-part SysEx
                 self._sysex_buffer = list(midi_message)
@@ -416,8 +416,22 @@ class LeslieLEDsController:
             # Continue SysEx
             self._sysex_buffer.extend(midi_message)
             if 0xF7 in midi_message:
-                self._handle_sysex(self._sysex_buffer)
+                self._dispatch_sysex_messages(self._sysex_buffer)
                 self._sysex_buffer = []
+
+    def _dispatch_sysex_messages(self, data):
+        """Split a possibly-coalesced buffer at F0/F7 boundaries and handle each."""
+        i = 0
+        while i < len(data):
+            if data[i] == 0xF0:
+                end = i + 1
+                while end < len(data) and data[end] != 0xF7:
+                    end += 1
+                if end < len(data):  # found F7
+                    self._handle_sysex(data[i:end + 1])
+                i = end + 1
+            else:
+                i += 1
     
     def _handle_sysex(self, sysex_data):
         """Parse and handle SysEx message from device"""
@@ -429,8 +443,7 @@ class LeslieLEDsController:
             return  # Not our message
 
         msg_type = sysex_data[2]
-        print(f"[MIDI] SysEx received: type=0x{msg_type:02X} len={len(sysex_data)}")
-        
+
         if msg_type == SYSEX_MSG_STATE_DUMP and len(sysex_data) >= 21:
             # State dump message - update all sliders
             # Data is at indices 3-19 (17 bytes), scaled from 0-127
@@ -916,13 +929,11 @@ class LeslieLEDsController:
                     # Also open input port from the same device
                     if self.midi_device_in:
                         midi_in_ports = self.midi_device_in.get_ports()
-                        print(f"[MIDI] available input ports: {midi_in_ports}")
                         # Find matching input port (same device name)
                         for i, in_port in enumerate(midi_in_ports):
                             # Match by device name (e.g., "Midi2DMXnow")
                             if "Midi2DMXnow" in in_port or port_identifier.split()[0] in in_port:
                                 self.midi_device_in.open_port(i)
-                                print(f"[MIDI] opened input port [{i}]: {in_port}")
                                 # Start device input thread
                                 if self.device_input_thread is None or not self.device_input_thread.is_alive():
                                     self.device_input_thread = threading.Thread(
@@ -1132,6 +1143,11 @@ def on_scene_button(sender, app_data, user_data):
         # Update the checkbox in the GUI
         dpg.set_value("save_mode_checkbox", False)
         update_scene_button_colors()
+    else:
+        # Optimistically mark the scene active immediately so the button
+        # turns green right away.  The SysEx state dump will confirm or
+        # correct this within the next send interval.
+        controller._update_active_scene(user_data)
 
 
 def on_dump_scene_bank(sender=None, app_data=None, user_data=None):

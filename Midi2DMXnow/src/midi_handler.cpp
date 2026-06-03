@@ -313,6 +313,9 @@ void MIDIHandler::sendSceneBankDumpSysEx() {
     }
 
     _midi.write(0xF7);
+    // Reset the periodic state-dump timer so it doesn't fire immediately
+    // after the bank dump and coalesce into the same macOS CoreMIDI delivery.
+    _lastSysExSend = millis();
 }
 
 void MIDIHandler::sendSceneBankStatusSysEx(uint8_t status, uint8_t detail) {
@@ -356,14 +359,20 @@ void MIDIHandler::update() {
         }
     }
     
-    // Periodic SysEx state broadcast
+    // Periodic SysEx state broadcast.
+    // IMPORTANT: never send both messages in the same update() call.
+    // Back-to-back SysEx bursts (~56 bytes) exceed the tinyusb TX FIFO
+    // (64 bytes / one bulk packet), causing silent byte drops that corrupt
+    // slot alignment in the rig-health payload and the scene byte in the
+    // state dump. Rig health takes priority; when it fires we defer the
+    // state dump by resetting its timer, keeping them perpetually staggered.
     uint32_t now = millis();
-    if (now - _lastSysExSend >= SYSEX_SEND_INTERVAL) {
-        sendStateSysEx();
-        _lastSysExSend = now;
-    }
     if (now - _lastRigHealthSend >= RIG_HEALTH_SEND_INTERVAL) {
         sendRigHealthSysEx();
         _lastRigHealthSend = now;
+        _lastSysExSend = now;  // defer state dump — never overlap in same call
+    } else if (now - _lastSysExSend >= SYSEX_SEND_INTERVAL) {
+        sendStateSysEx();
+        _lastSysExSend = now;
     }
 }
