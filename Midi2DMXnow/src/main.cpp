@@ -258,8 +258,10 @@ void loop() {
   // Update MeshClock timing
   meshClock.loop();
 
+  const uint32_t now = millis();
+
   // Age out stale heartbeats so the dot row reflects current state.
-  heartbeats.prune(millis());
+  heartbeats.prune(now);
 
   // Rig-health watchdog: detect silent ESP-NOW send-path failure.
   // If ≥1 slave is actively sending heartbeats but NONE of them have
@@ -312,7 +314,6 @@ void loop() {
   displayHandler.update();
   
   // Generate and send DMX frame at regular intervals
-  unsigned long now = millis();
   if (now - lastDMXSend >= DMX_SEND_INTERVAL) {
     lastDMXSend = now;
     
