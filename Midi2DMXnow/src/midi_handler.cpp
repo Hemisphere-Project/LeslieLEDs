@@ -7,11 +7,44 @@
 
 namespace {
 
+constexpr uint8_t USB_MIDI_CIN_SYSEX_START_CONTINUE = 0x04;
+constexpr uint8_t USB_MIDI_CIN_SYSEX_END_1 = 0x05;
+constexpr uint8_t USB_MIDI_CIN_SYSEX_END_2 = 0x06;
+constexpr uint8_t USB_MIDI_CIN_SYSEX_END_3 = 0x07;
+
 constexpr uint8_t SCENE_BANK_STATUS_OK = 0;
 constexpr uint8_t SCENE_BANK_STATUS_BAD_VERSION = 1;
 constexpr uint8_t SCENE_BANK_STATUS_BAD_SIZE = 2;
 constexpr uint8_t SCENE_BANK_STATUS_DECODE_ERROR = 3;
 constexpr uint8_t SCENE_BANK_STATUS_APPLY_ERROR = 4;
+
+void sendSysEx(USBMIDI& midi, const uint8_t* data, size_t length) {
+    if (!data || length < 2) {
+        return;
+    }
+
+    size_t offset = 0;
+    while (offset < length) {
+        const size_t remaining = length - offset;
+        midiEventPacket_t packet = {};
+
+        if (remaining > 3) {
+            packet.header = USB_MIDI_CIN_SYSEX_START_CONTINUE;
+            packet.byte1 = data[offset];
+            packet.byte2 = data[offset + 1];
+            packet.byte3 = data[offset + 2];
+            offset += 3;
+        } else {
+            packet.header = static_cast<uint8_t>(USB_MIDI_CIN_SYSEX_END_1 + (remaining - 1));
+            packet.byte1 = data[offset];
+            packet.byte2 = (remaining >= 2) ? data[offset + 1] : 0;
+            packet.byte3 = (remaining == 3) ? data[offset + 2] : 0;
+            offset = length;
+        }
+
+        midi.writePacket(&packet);
+    }
+}
 
 size_t decodeNibbleBytes(const uint8_t* encoded,
                         size_t encodedSize,
@@ -72,8 +105,7 @@ void MIDIHandler::sendStateSysEx() {
     if (!_dmxState) return;
     
     // Build SysEx message: F0 7D 01 <17 bytes of data> F7
-    // Total 20 bytes
-    uint8_t sysex[20];
+    uint8_t sysex[21];
     sysex[0] = 0xF0;  // SysEx start
     sysex[1] = SYSEX_MANUFACTURER_ID;
     sysex[2] = SYSEX_MSG_STATE_DUMP;
@@ -103,13 +135,9 @@ void MIDIHandler::sendStateSysEx() {
     // Active scene (0-19, or 127 for none)
     int8_t scene = _dmxState->getCurrentScene();
     sysex[19] = (scene >= 0 && scene < MAX_SCENES) ? scene : 127;
-    
-    // Note: SysEx end (F7) is handled by sending byte-by-byte
-    // The USBMIDI write() method handles SysEx parsing
-    for (int i = 0; i < 20; i++) {
-        _midi.write(sysex[i]);
-    }
-    _midi.write(0xF7);  // SysEx end
+    sysex[20] = 0xF7;
+
+    sendSysEx(_midi, sysex, sizeof(sysex));
 }
 
 void MIDIHandler::sendRigHealthSysEx() {
@@ -164,10 +192,8 @@ void MIDIHandler::sendRigHealthSysEx() {
     buf[3] = count;
     *p++ = 0xF7;
 
-    const int totalLen = static_cast<int>(p - buf);
-    for (int i = 0; i < totalLen; ++i) {
-        _midi.write(buf[i]);
-    }
+    const size_t totalLen = static_cast<size_t>(p - buf);
+    sendSysEx(_midi, buf, totalLen);
 }
 
 void MIDIHandler::resetSysExReceive() {
@@ -307,32 +333,39 @@ void MIDIHandler::sendSceneBankDumpSysEx() {
         return;
     }
 
-    _midi.write(0xF0);
-    _midi.write(SYSEX_MANUFACTURER_ID);
-    _midi.write(SYSEX_MSG_SCENE_BANK_DUMP);
-    _midi.write(DMXState::SCENE_BANK_WIRE_VERSION);
-    _midi.write(MAX_SCENES & 0x7F);
-    _midi.write(DMXState::SCENE_WIRE_SIZE & 0x7F);
+    uint8_t message[6 + (DMXState::SCENE_BANK_WIRE_SIZE * 2) + 1];
+    size_t length = 0;
+    message[length++] = 0xF0;
+    message[length++] = SYSEX_MANUFACTURER_ID;
+    message[length++] = SYSEX_MSG_SCENE_BANK_DUMP;
+    message[length++] = DMXState::SCENE_BANK_WIRE_VERSION;
+    message[length++] = MAX_SCENES & 0x7F;
+    message[length++] = DMXState::SCENE_WIRE_SIZE & 0x7F;
 
     for (size_t i = 0; i < rawSize; ++i) {
         uint8_t value = _sceneBankBuffer[i];
-        _midi.write((value >> 4) & 0x0F);
-        _midi.write(value & 0x0F);
+        message[length++] = (value >> 4) & 0x0F;
+        message[length++] = value & 0x0F;
     }
 
-    _midi.write(0xF7);
+    message[length++] = 0xF7;
+    sendSysEx(_midi, message, length);
+
     // Reset the periodic state-dump timer so it doesn't fire immediately
     // after the bank dump and coalesce into the same macOS CoreMIDI delivery.
     _lastSysExSend = millis();
 }
 
 void MIDIHandler::sendSceneBankStatusSysEx(uint8_t status, uint8_t detail) {
-    _midi.write(0xF0);
-    _midi.write(SYSEX_MANUFACTURER_ID);
-    _midi.write(SYSEX_MSG_SCENE_BANK_STATUS);
-    _midi.write(status & 0x7F);
-    _midi.write(detail & 0x7F);
-    _midi.write(0xF7);
+    const uint8_t message[] = {
+        0xF0,
+        SYSEX_MANUFACTURER_ID,
+        SYSEX_MSG_SCENE_BANK_STATUS,
+        static_cast<uint8_t>(status & 0x7F),
+        static_cast<uint8_t>(detail & 0x7F),
+        0xF7,
+    };
+    sendSysEx(_midi, message, sizeof(message));
 }
 
 void MIDIHandler::update() {

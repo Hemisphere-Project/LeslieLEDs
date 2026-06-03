@@ -42,6 +42,10 @@ SYSEX_MSG_SCENE_BANK_DUMP = 0x11
 SYSEX_MSG_SCENE_BANK_LOAD = 0x12
 SYSEX_MSG_SCENE_BANK_STATUS = 0x13
 
+STATE_DUMP_SYSEX_LEN = 21
+RIG_HEALTH_SLOT_SIZE = 6
+RIG_HEALTH_MAX_SLOTS = 8
+
 SCENE_BANK_STATUS_OK = 0
 SCENE_BANK_STATUS_BAD_VERSION = 1
 SCENE_BANK_STATUS_BAD_SIZE = 2
@@ -312,7 +316,12 @@ class LeslieLEDsController:
         # How long (seconds) to block sysex state-dump from overwriting a slider
         # after the user has touched it.  Covers the full roundtrip + any lag.
         self._sysex_suppress_window = 0.8
+        # Scene loads are optimistic in the GUI; hold off stale state dumps until
+        # the device confirms the newly requested scene or the timeout expires.
+        self._scene_feedback_window = 1.2
         self._active_scene: int = -1  # Currently active scene (-1 = none)
+        self._pending_scene_request: int = -1
+        self._pending_scene_deadline: float = 0.0
         self._sysex_buffer: list = []  # Buffer for incoming SysEx
         # Parsed rig health: list of dicts with keys nid, status, fps, reset
         self._rig_health: list = []
@@ -467,9 +476,15 @@ class LeslieLEDsController:
 
         msg_type = sysex_data[2]
 
-        if msg_type == SYSEX_MSG_STATE_DUMP and len(sysex_data) >= 21:
+        if msg_type == SYSEX_MSG_STATE_DUMP:
+            if len(sysex_data) != STATE_DUMP_SYSEX_LEN:
+                print(f"[RX] malformed STATE_DUMP len={len(sysex_data)} expected={STATE_DUMP_SYSEX_LEN}")
+                return
             scene = sysex_data[19] if len(sysex_data) > 19 else 127
             print(f"[RX] STATE_DUMP scene={scene} len={len(sysex_data)}")
+            resolved_scene = scene if scene < MAX_SCENES else -1
+            if not self._accept_scene_state_dump(resolved_scene):
+                return
             # State dump message - update all sliders
             # Data is at indices 3-19 (17 bytes), scaled from 0-127
             self._update_slider_from_sysex(CC_MASTER_BRIGHTNESS, sysex_data[3])
@@ -492,16 +507,24 @@ class LeslieLEDsController:
             self._update_slider_from_sysex(CC_COLOR_B_WHITE, sysex_data[18])
             
             # Update active scene indicator
-            scene = sysex_data[19] if len(sysex_data) > 19 else 127
-            self._update_active_scene(scene if scene < MAX_SCENES else -1)
+            self._update_active_scene(resolved_scene)
 
-        elif msg_type == SYSEX_MSG_RIG_HEALTH and len(sysex_data) >= 4:
+        elif msg_type == SYSEX_MSG_RIG_HEALTH:
             # Rig health table.  Format: F0 7D 02 <count> [N×6 bytes] F7
+            if len(sysex_data) < 5:
+                print(f"[RX] malformed RIG_HEALTH len={len(sysex_data)}")
+                return
             count = sysex_data[3]
+            expected_len = 5 + (count * RIG_HEALTH_SLOT_SIZE)
+            if count > RIG_HEALTH_MAX_SLOTS or len(sysex_data) != expected_len:
+                print(
+                    f"[RX] malformed RIG_HEALTH count={count} len={len(sysex_data)} expected={expected_len}"
+                )
+                return
             print(f"[RX] RIG_HEALTH count={count} payload_bytes={len(sysex_data)-5}")
             slots = []
             for i in range(count):
-                base = 4 + i * 6
+                base = 4 + i * RIG_HEALTH_SLOT_SIZE
                 if base + 5 >= len(sysex_data):
                     break
                 slots.append({
@@ -549,11 +572,15 @@ class LeslieLEDsController:
                 if i < len(s):
                     slot = s[i]
                     nid = slot["nid"]
-                    nid_str = f"{nid[0]:02X}:{nid[1]:02X}:{nid[2]:02X}"
-                    status_label = _STATUS_LABEL.get(slot["status"], "?    ").strip()
-                    rst = _RESET_REASON.get(slot["reset"], str(slot["reset"]))
-                    text = f"  {nid_str}  {status_label:<5}  {slot['fps']:3d}fps  {rst}"
-                    col = cm.get(slot["status"], cm[SLOT_EMPTY])
+                    if slot["status"] == SLOT_EMPTY and nid == (0, 0, 0):
+                        text = "  --:--:--"
+                        col = cm[SLOT_EMPTY]
+                    else:
+                        nid_str = f"{nid[0]:02X}:{nid[1]:02X}:{nid[2]:02X}"
+                        status_label = _STATUS_LABEL.get(slot["status"], "?    ").strip()
+                        rst = _RESET_REASON.get(slot["reset"], str(slot["reset"]))
+                        text = f"  {nid_str}  {status_label:<5}  {slot['fps']:3d}fps  {rst}"
+                        col = cm.get(slot["status"], cm[SLOT_EMPTY])
                 else:
                     text = "  --:--:--"
                     col = cm[SLOT_EMPTY]
@@ -612,6 +639,31 @@ class LeslieLEDsController:
                 best_diff = diff
                 best_match = name
         self._dpg_set(combo_id, best_match)
+
+    def _mark_scene_requested(self, scene_index: int):
+        self._pending_scene_request = scene_index
+        self._pending_scene_deadline = time.monotonic() + self._scene_feedback_window
+
+    def _accept_scene_state_dump(self, scene_index: int) -> bool:
+        pending_scene = self._pending_scene_request
+        if pending_scene < 0:
+            return True
+
+        now = time.monotonic()
+        if now >= self._pending_scene_deadline:
+            self._pending_scene_request = -1
+            self._pending_scene_deadline = 0.0
+            return True
+
+        if scene_index == pending_scene:
+            self._pending_scene_request = -1
+            self._pending_scene_deadline = 0.0
+            return True
+
+        print(
+            f"[SCENE] ignoring stale state dump scene={scene_index} while waiting for {pending_scene}"
+        )
+        return False
 
     def _update_active_scene(self, scene_index):
         """Update the active scene indicator on buttons. No-op in headless."""
@@ -1181,6 +1233,7 @@ def on_scene_button(sender, app_data, user_data):
         # Optimistically mark the scene active immediately so the button
         # turns green right away.  The SysEx state dump will confirm or
         # correct this within the next send interval.
+        controller._mark_scene_requested(user_data)
         print(f"[SCENE] optimistic active_scene={user_data}")
         controller._update_active_scene(user_data)
 
