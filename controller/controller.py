@@ -424,11 +424,12 @@ class LeslieLEDsController:
         # Minimum valid message: F0 7D 01 <data> F7
         if len(sysex_data) < 5:
             return
-        
+
         if sysex_data[1] != SYSEX_MANUFACTURER_ID:
             return  # Not our message
-        
+
         msg_type = sysex_data[2]
+        print(f"[MIDI] SysEx received: type=0x{msg_type:02X} len={len(sysex_data)}")
         
         if msg_type == SYSEX_MSG_STATE_DUMP and len(sysex_data) >= 21:
             # State dump message - update all sliders
@@ -915,17 +916,21 @@ class LeslieLEDsController:
                     # Also open input port from the same device
                     if self.midi_device_in:
                         midi_in_ports = self.midi_device_in.get_ports()
+                        print(f"[MIDI] available input ports: {midi_in_ports}")
                         # Find matching input port (same device name)
                         for i, in_port in enumerate(midi_in_ports):
                             # Match by device name (e.g., "Midi2DMXnow")
                             if "Midi2DMXnow" in in_port or port_identifier.split()[0] in in_port:
                                 self.midi_device_in.open_port(i)
+                                print(f"[MIDI] opened input port [{i}]: {in_port}")
                                 # Start device input thread
                                 if self.device_input_thread is None or not self.device_input_thread.is_alive():
                                     self.device_input_thread = threading.Thread(
                                         target=self._device_midi_loop, daemon=True)
                                     self.device_input_thread.start()
                                 break
+                        else:
+                            print(f"[MIDI] WARNING: no matching input port found for '{port_identifier}'")
                     return True
         elif port_type == "SERIAL":
             # Connect to Serial MIDI port
