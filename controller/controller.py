@@ -308,6 +308,9 @@ class LeslieLEDsController:
         self._cc_last_time: dict[int, float] = {}
         self._cc_last_value: dict[int, int] = {}
         self._cc_min_interval = 0.004  # seconds between CC transmissions per control
+        # How long (seconds) to block sysex state-dump from overwriting a slider
+        # after the user has touched it.  Covers the full roundtrip + any lag.
+        self._sysex_suppress_window = 0.8
         self._active_scene: int = -1  # Currently active scene (-1 = none)
         self._sysex_buffer: list = []  # Buffer for incoming SysEx
         # Parsed rig health: list of dicts with keys nid, status, fps, reset
@@ -510,6 +513,11 @@ class LeslieLEDsController:
 
     def _update_slider_from_sysex(self, cc_number, value):
         """Update a slider from SysEx data (value is 0-127). No-op in headless."""
+        # Suppress the update if the user moved this control recently to avoid
+        # the slider snapping back during the ESP32 roundtrip.
+        last_sent = self._cc_last_time.get(cc_number, -1.0)
+        if time.monotonic() - last_sent < self._sysex_suppress_window:
+            return
         self._dpg_set(f"cc_{cc_number}_slider", value)
 
         # Also update combo boxes for mode/mirror/direction
