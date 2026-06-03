@@ -10,6 +10,7 @@ Two run modes:
 import argparse
 import json
 import os
+import queue
 import signal
 import socket
 import subprocess
@@ -319,6 +320,9 @@ class LeslieLEDsController:
         self._pending_scene_bank_save_path: Optional[str] = None
         self._pending_scene_bank_operation: Optional[str] = None
         self._pending_scene_bank_deadline: float = 0.0
+        # Thread-safe queue for GUI mutations from background threads.
+        # Background threads post callables here; the main render loop drains it.
+        self._gui_queue: queue.SimpleQueue = queue.SimpleQueue()
         # When True, skip every DearPyGUI mutation (no UI is mounted).
         # Set by main_headless(); all _safe_* DPG helpers no-op in that mode.
         self.headless = False
@@ -326,14 +330,26 @@ class LeslieLEDsController:
     def _dpg_set(self, tag: str, value):
         if self.headless or dpg is None:
             return
-        if dpg.does_item_exist(tag):
-            dpg.set_value(tag, value)
+        if threading.current_thread() is threading.main_thread():
+            if dpg.does_item_exist(tag):
+                dpg.set_value(tag, value)
+        else:
+            def _do(t=tag, v=value):
+                if dpg.does_item_exist(t):
+                    dpg.set_value(t, v)
+            self._gui_queue.put(_do)
 
     def _dpg_bind_theme(self, tag: str, theme):
         if self.headless or dpg is None:
             return
-        if dpg.does_item_exist(tag):
-            dpg.bind_item_theme(tag, theme)
+        if threading.current_thread() is threading.main_thread():
+            if dpg.does_item_exist(tag):
+                dpg.bind_item_theme(tag, theme)
+        else:
+            def _do(t=tag, th=theme):
+                if dpg.does_item_exist(t):
+                    dpg.bind_item_theme(t, th)
+            self._gui_queue.put(_do)
         
     def setup_midi(self):
         """Initialize MIDI output and virtual input"""
@@ -476,22 +492,31 @@ class LeslieLEDsController:
             SLOT_LOST:   (220,  50,  50, 255),
             SLOT_EMPTY:  (80,   80,  80, 150),
         }
-        for i in range(8):
-            tag = f"hb_dot_{i}"
-            if not dpg.does_item_exist(tag):
-                continue
-            if i < len(self._rig_health):
-                slot = self._rig_health[i]
-                nid = slot["nid"]
-                nid_str = f"{nid[0]:02X}:{nid[1]:02X}:{nid[2]:02X}"
-                status_label = _STATUS_LABEL.get(slot["status"], "?    ").strip()
-                rst = _RESET_REASON.get(slot["reset"], str(slot["reset"]))
-                text = f"  {nid_str}  {status_label:<5}  {slot['fps']:3d}fps  {rst}"
-                col = color_map.get(slot["status"], color_map[SLOT_EMPTY])
-            else:
-                text = "  --:--:--"
-                col = color_map[SLOT_EMPTY]
-            dpg.configure_item(tag, default_value=text, color=col)
+        # Snapshot data now so the lambda captures a stable copy.
+        slots = list(self._rig_health)
+
+        def _apply(s=slots, cm=color_map):
+            for i in range(8):
+                tag = f"hb_dot_{i}"
+                if not dpg.does_item_exist(tag):
+                    continue
+                if i < len(s):
+                    slot = s[i]
+                    nid = slot["nid"]
+                    nid_str = f"{nid[0]:02X}:{nid[1]:02X}:{nid[2]:02X}"
+                    status_label = _STATUS_LABEL.get(slot["status"], "?    ").strip()
+                    rst = _RESET_REASON.get(slot["reset"], str(slot["reset"]))
+                    text = f"  {nid_str}  {status_label:<5}  {slot['fps']:3d}fps  {rst}"
+                    col = cm.get(slot["status"], cm[SLOT_EMPTY])
+                else:
+                    text = "  --:--:--"
+                    col = cm[SLOT_EMPTY]
+                dpg.configure_item(tag, default_value=text, color=col)
+
+        if threading.current_thread() is threading.main_thread():
+            _apply()
+        else:
+            self._gui_queue.put(_apply)
 
     def _print_rig_health_if_due(self, interval: float = 5.0):
         """Print a rig-health table to stdout in headless mode (throttled)."""
@@ -532,8 +557,6 @@ class LeslieLEDsController:
         """Update a combo box selection based on CC value. No-op in headless."""
         if self.headless or dpg is None:
             return
-        if not dpg.does_item_exist(combo_id):
-            return
         # Find closest matching mode
         best_match = modes_list[0][0]
         best_diff = 255
@@ -542,23 +565,34 @@ class LeslieLEDsController:
             if diff < best_diff:
                 best_diff = diff
                 best_match = name
-        dpg.set_value(combo_id, best_match)
+        self._dpg_set(combo_id, best_match)
 
     def _update_active_scene(self, scene_index):
         """Update the active scene indicator on buttons. No-op in headless."""
         self._active_scene = scene_index
         if self.headless or dpg is None:
             return
-        try:
-            for i in range(MAX_SCENES):
-                if self.scene_save_mode:
-                    self._dpg_bind_theme(f"scene_btn_{i}", "save_mode_theme")
-                elif i == scene_index:
-                    self._dpg_bind_theme(f"scene_btn_{i}", "active_scene_theme")
-                else:
-                    self._dpg_bind_theme(f"scene_btn_{i}", 0)
-        except Exception:
-            pass  # GUI not ready yet
+        save_mode = self.scene_save_mode  # snapshot at call time
+
+        def _apply(si=scene_index, sm=save_mode):
+            try:
+                for i in range(MAX_SCENES):
+                    tag = f"scene_btn_{i}"
+                    if not dpg.does_item_exist(tag):
+                        continue
+                    if sm:
+                        dpg.bind_item_theme(tag, "save_mode_theme")
+                    elif i == si:
+                        dpg.bind_item_theme(tag, "active_scene_theme")
+                    else:
+                        dpg.bind_item_theme(tag, 0)
+            except Exception:
+                pass  # GUI not ready yet
+
+        if threading.current_thread() is threading.main_thread():
+            _apply()
+        else:
+            self._gui_queue.put(_apply)
 
     def _default_scene_bank_path(self) -> str:
         repo_root = Path(__file__).parent.parent
@@ -588,9 +622,16 @@ class LeslieLEDsController:
             print(f"[scene-bank] {message}")
         if self.headless or dpg is None:
             return
-        if dpg.does_item_exist("scene_bank_status_text"):
-            dpg.set_value("scene_bank_status_text", message)
-            dpg.configure_item("scene_bank_status_text", color=color)
+
+        def _apply(m=message, c=color):
+            if dpg.does_item_exist("scene_bank_status_text"):
+                dpg.set_value("scene_bank_status_text", m)
+                dpg.configure_item("scene_bank_status_text", color=c)
+
+        if threading.current_thread() is threading.main_thread():
+            _apply()
+        else:
+            self._gui_queue.put(_apply)
 
     @staticmethod
     def _encode_nibble_bytes(raw: bytes) -> list[int]:
@@ -815,6 +856,16 @@ class LeslieLEDsController:
         else:
             message = "Scene bank load timed out waiting for the device acknowledgement."
         self._update_scene_bank_status(message, (255, 140, 100))
+
+    def drain_gui_queue(self):
+        """Apply all pending GUI mutations posted from background threads.
+        Must be called from the main render loop (main thread only)."""
+        try:
+            while True:
+                fn = self._gui_queue.get_nowait()
+                fn()
+        except queue.Empty:
+            pass
         
     def get_available_ports(self):
         """Get list of available MIDI output ports and serial ports"""
@@ -1479,6 +1530,7 @@ def main_gui() -> int:
             if single_instance.consume_activate_request():
                 _activate_gui_window()
             controller.poll_pending_operations()
+            controller.drain_gui_queue()
             dpg.render_dearpygui_frame()
 
         return 0
