@@ -30,6 +30,10 @@ import serial.tools.list_ports
 # headless path runs on machines without an X server / Wayland session.
 dpg = None  # type: ignore
 
+DEBUG_MIDI_LOGS = os.environ.get("LESLIE_DEBUG_MIDI", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+
 # MIDI Configuration
 MIDI_CHANNEL = 0  # Channel 1 (0-indexed)
 
@@ -336,6 +340,10 @@ class LeslieLEDsController:
         # Set by main_headless(); all _safe_* DPG helpers no-op in that mode.
         self.headless = False
 
+    def _debug_log(self, message: str):
+        if DEBUG_MIDI_LOGS:
+            print(message)
+
     def _dpg_set(self, tag: str, value):
         if self.headless or dpg is None:
             return
@@ -417,22 +425,26 @@ class LeslieLEDsController:
         if midi_message[0] == 0xF0:
             # Full SysEx message (may contain multiple coalesced messages)
             if midi_message[-1] == 0xF7:
-                print(f"[RX] full sysex len={len(midi_message)} types={self._dbg_sysex_types(midi_message)}")
+                self._debug_log(
+                    f"[RX] full sysex len={len(midi_message)} types={self._dbg_sysex_types(midi_message)}"
+                )
                 self._dispatch_sysex_messages(midi_message)
             else:
                 # Start of multi-part SysEx
-                print(f"[RX] sysex START len={len(midi_message)}")
+                self._debug_log(f"[RX] sysex START len={len(midi_message)}")
                 self._sysex_buffer = list(midi_message)
         elif self._sysex_buffer:
             # Continue SysEx
             self._sysex_buffer.extend(midi_message)
             if 0xF7 in midi_message:
                 buf = self._sysex_buffer
-                print(f"[RX] sysex COMPLETE assembled len={len(buf)} types={self._dbg_sysex_types(buf)}")
+                self._debug_log(
+                    f"[RX] sysex COMPLETE assembled len={len(buf)} types={self._dbg_sysex_types(buf)}"
+                )
                 self._dispatch_sysex_messages(buf)
                 self._sysex_buffer = []
             else:
-                print(f"[RX] sysex CONT buf_len={len(self._sysex_buffer)}")
+                self._debug_log(f"[RX] sysex CONT buf_len={len(self._sysex_buffer)}")
 
     @staticmethod
     def _dbg_sysex_types(data):
@@ -481,7 +493,7 @@ class LeslieLEDsController:
                 print(f"[RX] malformed STATE_DUMP len={len(sysex_data)} expected={STATE_DUMP_SYSEX_LEN}")
                 return
             scene = sysex_data[19] if len(sysex_data) > 19 else 127
-            print(f"[RX] STATE_DUMP scene={scene} len={len(sysex_data)}")
+            self._debug_log(f"[RX] STATE_DUMP scene={scene} len={len(sysex_data)}")
             resolved_scene = scene if scene < MAX_SCENES else -1
             if not self._accept_scene_state_dump(resolved_scene):
                 return
@@ -521,7 +533,7 @@ class LeslieLEDsController:
                     f"[RX] malformed RIG_HEALTH count={count} len={len(sysex_data)} expected={expected_len}"
                 )
                 return
-            print(f"[RX] RIG_HEALTH count={count} payload_bytes={len(sysex_data)-5}")
+            self._debug_log(f"[RX] RIG_HEALTH count={count} payload_bytes={len(sysex_data)-5}")
             slots = []
             for i in range(count):
                 base = 4 + i * RIG_HEALTH_SLOT_SIZE
@@ -533,18 +545,24 @@ class LeslieLEDsController:
                     "fps":    sysex_data[base+4],
                     "reset":  sysex_data[base+5],
                 })
-                print(f"[RX]   slot {i}: nid={sysex_data[base]:02X}:{sysex_data[base+1]:02X}:{sysex_data[base+2]:02X} status={sysex_data[base+3]} fps={sysex_data[base+4]} rst={sysex_data[base+5]}")
+                self._debug_log(
+                    f"[RX]   slot {i}: nid={sysex_data[base]:02X}:{sysex_data[base+1]:02X}:{sysex_data[base+2]:02X} status={sysex_data[base+3]} fps={sysex_data[base+4]} rst={sysex_data[base+5]}"
+                )
             self._rig_health = slots
             self._update_rig_health_display()
             if self.headless:
                 self._print_rig_health_if_due()
 
         elif msg_type == SYSEX_MSG_SCENE_BANK_DUMP and len(sysex_data) >= 7:
-            print(f"[RX] SCENE_BANK_DUMP len={len(sysex_data)} scene_count={sysex_data[4]} scene_size={sysex_data[5]}")
+            self._debug_log(
+                f"[RX] SCENE_BANK_DUMP len={len(sysex_data)} scene_count={sysex_data[4]} scene_size={sysex_data[5]}"
+            )
             self._handle_scene_bank_dump(sysex_data)
 
         elif msg_type == SYSEX_MSG_SCENE_BANK_STATUS and len(sysex_data) >= 5:
-            print(f"[RX] SCENE_BANK_STATUS code={sysex_data[3]} detail={sysex_data[4] if len(sysex_data)>4 else '?'}")
+            self._debug_log(
+                f"[RX] SCENE_BANK_STATUS code={sysex_data[3]} detail={sysex_data[4] if len(sysex_data)>4 else '?'}"
+            )
             self._handle_scene_bank_status(sysex_data)
 
         else:
@@ -563,12 +581,22 @@ class LeslieLEDsController:
         }
         # Snapshot data now so the lambda captures a stable copy.
         slots = list(self._rig_health)
+        visible_count = 0
+        for index, slot in enumerate(slots):
+            if slot.get("status") != SLOT_EMPTY or slot.get("nid") != (0, 0, 0):
+                visible_count = index + 1
+        if visible_count == 0:
+            visible_count = 1
 
-        def _apply(s=slots, cm=color_map):
+        def _apply(s=slots, cm=color_map, vc=visible_count):
             for i in range(8):
                 tag = f"hb_dot_{i}"
                 if not dpg.does_item_exist(tag):
                     continue
+                if i >= vc:
+                    dpg.configure_item(tag, show=False)
+                    continue
+                dpg.configure_item(tag, show=True)
                 if i < len(s):
                     slot = s[i]
                     nid = slot["nid"]
@@ -660,14 +688,16 @@ class LeslieLEDsController:
             self._pending_scene_deadline = 0.0
             return True
 
-        print(
+        self._debug_log(
             f"[SCENE] ignoring stale state dump scene={scene_index} while waiting for {pending_scene}"
         )
         return False
 
     def _update_active_scene(self, scene_index):
         """Update the active scene indicator on buttons. No-op in headless."""
-        print(f"[SCENE] _update_active_scene({scene_index}) prev={self._active_scene} thread={'main' if threading.current_thread() is threading.main_thread() else 'bg'}")
+        self._debug_log(
+            f"[SCENE] _update_active_scene({scene_index}) prev={self._active_scene} thread={'main' if threading.current_thread() is threading.main_thread() else 'bg'}"
+        )
         self._active_scene = scene_index
         if self.headless or dpg is None:
             return
@@ -1219,7 +1249,7 @@ def on_direction_mode(sender, app_data):
 def on_scene_button(sender, app_data, user_data):
     """Handle scene button press"""
     scene_note = scene_index_to_note(user_data)
-    print(f"[SCENE] button {user_data+1} pressed -> note {scene_note}")
+    controller._debug_log(f"[SCENE] button {user_data+1} pressed -> note {scene_note}")
     controller.send_note(scene_note)
 
     # Auto-unarm save mode after clicking a scene button
@@ -1234,7 +1264,7 @@ def on_scene_button(sender, app_data, user_data):
         # turns green right away.  The SysEx state dump will confirm or
         # correct this within the next send interval.
         controller._mark_scene_requested(user_data)
-        print(f"[SCENE] optimistic active_scene={user_data}")
+        controller._debug_log(f"[SCENE] optimistic active_scene={user_data}")
         controller._update_active_scene(user_data)
 
 
