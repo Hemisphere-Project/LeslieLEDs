@@ -1043,15 +1043,19 @@ def on_scene_button(sender, app_data, user_data):
 
 
 def on_dump_scene_bank(sender=None, app_data=None, user_data=None):
-    """Request a full scene-bank dump from the device and save it on the host."""
+    """Pick a save path then dump the full scene bank from the device."""
+    _select_scene_bank_path(save_dialog=True)
     file_path = dpg.get_value("scene_bank_path") if dpg is not None else ""
-    controller.request_scene_bank_dump(file_path)
+    if file_path:
+        controller.request_scene_bank_dump(file_path)
 
 
 def on_load_scene_bank(sender=None, app_data=None, user_data=None):
-    """Load a full scene-bank file from disk and push it to the device."""
+    """Pick an existing scene-bank file then push it to the device."""
+    _select_scene_bank_path(save_dialog=False)
     file_path = dpg.get_value("scene_bank_path") if dpg is not None else ""
-    controller.load_scene_bank_from_file(file_path)
+    if file_path:
+        controller.load_scene_bank_from_file(file_path)
 
 
 def _select_scene_bank_path(save_dialog: bool):
@@ -1097,15 +1101,6 @@ def _select_scene_bank_path(save_dialog: bool):
     if selected_path:
         dpg.set_value("scene_bank_path", selected_path)
 
-
-def on_browse_scene_bank_save(sender=None, app_data=None, user_data=None):
-    """Pick a target path for dumping the full scene bank."""
-    _select_scene_bank_path(save_dialog=True)
-
-
-def on_browse_scene_bank_load(sender=None, app_data=None, user_data=None):
-    """Pick an existing scene-bank file to upload to the device."""
-    _select_scene_bank_path(save_dialog=False)
 
 
 def on_reset_button():
@@ -1345,15 +1340,12 @@ def create_gui():
             
             dpg.add_spacer(height=10)
             dpg.add_text("Scene Bank Backup:")
+            dpg.add_input_text(tag="scene_bank_path",
+                               default_value=controller._default_scene_bank_path(),
+                               width=420, readonly=True)
             with dpg.group(horizontal=True):
-                dpg.add_input_text(tag="scene_bank_path",
-                                   default_value=controller._default_scene_bank_path(),
-                                   width=210)
-                dpg.add_button(label="Save As...", callback=on_browse_scene_bank_save, width=90)
-                dpg.add_button(label="Open...", callback=on_browse_scene_bank_load, width=90)
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Dump Bank", callback=on_dump_scene_bank, width=110)
-                dpg.add_button(label="Load Bank", callback=on_load_scene_bank, width=110)
+                dpg.add_button(label="Save As & Dump...", callback=on_dump_scene_bank, width=200)
+                dpg.add_button(label="Open & Load...", callback=on_load_scene_bank, width=200)
             dpg.add_text("USB MIDI only. Saves/restores the full device preset bank as one host file.",
                          color=(120, 120, 120), wrap=420)
             dpg.add_text("", tag="scene_bank_status_text", color=(150, 150, 150), wrap=420)
