@@ -58,6 +58,12 @@ const uint32_t DMX_SEND_INTERVAL = 33; // ~30Hz DMX refresh rate
 // Task WDT: if setup() or loop() ever hangs past this, the chip self-resets.
 const uint32_t WDT_TIMEOUT_MS = 15000;
 
+// Rig-health watchdog: if we have ≥1 active slave but every one of them
+// has been reporting "no DMX" for this long, our ESP-NOW send path is
+// silently wedged (esp_now_send returns OK but packets don't arrive).
+// Restarting resets the radio stack, which fixes the issue.
+const uint32_t RIG_NO_DMX_RESTART_MS = 60000;  // 1 minute
+
 // Reset-reason rolling log in NVS. No serial required to read it back later.
 namespace bootlog {
     constexpr const char* NAMESPACE = "bootlog";
@@ -254,6 +260,40 @@ void loop() {
 
   // Age out stale heartbeats so the dot row reflects current state.
   heartbeats.prune(millis());
+
+  // Rig-health watchdog: detect silent ESP-NOW send-path failure.
+  // If ≥1 slave is actively sending heartbeats but NONE of them have
+  // received a DMX frame recently, the sender is wedged. Self-heal.
+  {
+    static uint32_t rigNoDmxSince = 0;
+    HeartbeatCollector::Slot hbSlots[HeartbeatCollector::MAX_SLAVES];
+    heartbeats.copySlots(hbSlots);
+    bool hasActiveSlave = false;
+    bool anySlaveHasDmx  = false;
+    for (uint8_t i = 0; i < HeartbeatCollector::MAX_SLAVES; ++i) {
+      if (!hbSlots[i].used) continue;
+      if ((now - hbSlots[i].lastHeardLocalMs) >= HeartbeatCollector::STALE_MS) continue;
+      hasActiveSlave = true;
+      if (hbSlots[i].last.msSinceLastFrame < HeartbeatCollector::NO_DMX_FRAME_MS) {
+        anySlaveHasDmx = true;
+      }
+    }
+    if (hasActiveSlave && !anySlaveHasDmx) {
+      if (rigNoDmxSince == 0) rigNoDmxSince = now;
+      else if (now - rigNoDmxSince > RIG_NO_DMX_RESTART_MS) {
+        #if DEBUG_MODE && !defined(USE_SERIAL_MIDI)
+          Serial.printf("[RIG] All %u active slave(s) report no DMX for >%lus — restarting\n",
+                        heartbeats.activeCount(now), RIG_NO_DMX_RESTART_MS / 1000);
+          Serial.flush();
+        #endif
+        displayHandler.logMessage("RIG watchdog: restarting");
+        delay(50);
+        ESP.restart();
+      }
+    } else {
+      rigNoDmxSince = 0;
+    }
+  }
 
   // Handle MIDI input
   midiHandler.update();

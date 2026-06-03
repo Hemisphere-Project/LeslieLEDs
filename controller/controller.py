@@ -408,16 +408,39 @@ class LeslieLEDsController:
         if midi_message[0] == 0xF0:
             # Full SysEx message (may contain multiple coalesced messages)
             if midi_message[-1] == 0xF7:
+                print(f"[RX] full sysex len={len(midi_message)} types={self._dbg_sysex_types(midi_message)}")
                 self._dispatch_sysex_messages(midi_message)
             else:
                 # Start of multi-part SysEx
+                print(f"[RX] sysex START len={len(midi_message)}")
                 self._sysex_buffer = list(midi_message)
         elif self._sysex_buffer:
             # Continue SysEx
             self._sysex_buffer.extend(midi_message)
             if 0xF7 in midi_message:
-                self._dispatch_sysex_messages(self._sysex_buffer)
+                buf = self._sysex_buffer
+                print(f"[RX] sysex COMPLETE assembled len={len(buf)} types={self._dbg_sysex_types(buf)}")
+                self._dispatch_sysex_messages(buf)
                 self._sysex_buffer = []
+            else:
+                print(f"[RX] sysex CONT buf_len={len(self._sysex_buffer)}")
+
+    @staticmethod
+    def _dbg_sysex_types(data):
+        """Return list of message types found in a raw SysEx buffer."""
+        types = []
+        i = 0
+        while i < len(data):
+            if data[i] == 0xF0:
+                end = i + 1
+                while end < len(data) and data[end] != 0xF7:
+                    end += 1
+                if end < len(data) and end - i >= 3:
+                    types.append(f"0x{data[i+2]:02X}(len={end-i+1})")
+                i = end + 1
+            else:
+                i += 1
+        return types
 
     def _dispatch_sysex_messages(self, data):
         """Split a possibly-coalesced buffer at F0/F7 boundaries and handle each."""
@@ -445,6 +468,8 @@ class LeslieLEDsController:
         msg_type = sysex_data[2]
 
         if msg_type == SYSEX_MSG_STATE_DUMP and len(sysex_data) >= 21:
+            scene = sysex_data[19] if len(sysex_data) > 19 else 127
+            print(f"[RX] STATE_DUMP scene={scene} len={len(sysex_data)}")
             # State dump message - update all sliders
             # Data is at indices 3-19 (17 bytes), scaled from 0-127
             self._update_slider_from_sysex(CC_MASTER_BRIGHTNESS, sysex_data[3])
@@ -473,6 +498,7 @@ class LeslieLEDsController:
         elif msg_type == SYSEX_MSG_RIG_HEALTH and len(sysex_data) >= 4:
             # Rig health table.  Format: F0 7D 02 <count> [N×6 bytes] F7
             count = sysex_data[3]
+            print(f"[RX] RIG_HEALTH count={count} payload_bytes={len(sysex_data)-5}")
             slots = []
             for i in range(count):
                 base = 4 + i * 6
@@ -484,16 +510,22 @@ class LeslieLEDsController:
                     "fps":    sysex_data[base+4],
                     "reset":  sysex_data[base+5],
                 })
+                print(f"[RX]   slot {i}: nid={sysex_data[base]:02X}:{sysex_data[base+1]:02X}:{sysex_data[base+2]:02X} status={sysex_data[base+3]} fps={sysex_data[base+4]} rst={sysex_data[base+5]}")
             self._rig_health = slots
             self._update_rig_health_display()
             if self.headless:
                 self._print_rig_health_if_due()
 
         elif msg_type == SYSEX_MSG_SCENE_BANK_DUMP and len(sysex_data) >= 7:
+            print(f"[RX] SCENE_BANK_DUMP len={len(sysex_data)} scene_count={sysex_data[4]} scene_size={sysex_data[5]}")
             self._handle_scene_bank_dump(sysex_data)
 
         elif msg_type == SYSEX_MSG_SCENE_BANK_STATUS and len(sysex_data) >= 5:
+            print(f"[RX] SCENE_BANK_STATUS code={sysex_data[3]} detail={sysex_data[4] if len(sysex_data)>4 else '?'}")
             self._handle_scene_bank_status(sysex_data)
+
+        else:
+            print(f"[RX] UNKNOWN/SHORT type=0x{msg_type:02X} len={len(sysex_data)}")
 
     def _update_rig_health_display(self):
         """Update rig-health text rows in the GUI. No-op in headless."""
@@ -561,7 +593,7 @@ class LeslieLEDsController:
 
         # Also update combo boxes for mode/mirror/direction
         if cc_number == CC_ANIMATION_MODE:
-            self._update_combo_from_value("anim_mode_combo", ANIMATION_MODES, value)
+            self._update_combo_from_value("animation_mode_combo", ANIMATION_MODES, value)
         elif cc_number == CC_MIRROR_MODE:
             self._update_combo_from_value("mirror_mode_combo", MIRROR_MODES, value)
         elif cc_number == CC_DIRECTION:
@@ -583,6 +615,7 @@ class LeslieLEDsController:
 
     def _update_active_scene(self, scene_index):
         """Update the active scene indicator on buttons. No-op in headless."""
+        print(f"[SCENE] _update_active_scene({scene_index}) prev={self._active_scene} thread={'main' if threading.current_thread() is threading.main_thread() else 'bg'}")
         self._active_scene = scene_index
         if self.headless or dpg is None:
             return
@@ -1134,8 +1167,9 @@ def on_direction_mode(sender, app_data):
 def on_scene_button(sender, app_data, user_data):
     """Handle scene button press"""
     scene_note = scene_index_to_note(user_data)
+    print(f"[SCENE] button {user_data+1} pressed -> note {scene_note}")
     controller.send_note(scene_note)
-    
+
     # Auto-unarm save mode after clicking a scene button
     if controller.scene_save_mode:
         controller.scene_save_mode = False
@@ -1147,6 +1181,7 @@ def on_scene_button(sender, app_data, user_data):
         # Optimistically mark the scene active immediately so the button
         # turns green right away.  The SysEx state dump will confirm or
         # correct this within the next send interval.
+        print(f"[SCENE] optimistic active_scene={user_data}")
         controller._update_active_scene(user_data)
 
 
