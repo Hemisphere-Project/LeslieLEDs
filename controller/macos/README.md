@@ -18,6 +18,17 @@ This folder contains the no-Terminal launcher for the controller GUI:
 2. Add that app to the Dock or make a Finder alias to it. Do not move the app bundle out of the repo, because it resolves `controller/launcher.py` by relative path.
 3. Use `controller/LeslieLEDs-Debug.command` whenever you want startup logs and stdout/stderr in Terminal.
 
+## If macOS says "Permission denied"
+
+Run this once in Terminal from the repo checkout:
+
+```bash
+cd controller/macos
+./install_macos_app.sh
+```
+
+That script reapplies the executable bit to the app launcher, clears the common quarantine attribute from the app bundle, and refreshes Finder's view of the bundle.
+
 ## Notes
 
 - Finder launches often have a minimal `PATH`, so the wrapper adds the common Homebrew paths (`/opt/homebrew/bin` and `/usr/local/bin`) before looking for Python, `git`, or `uv`.
