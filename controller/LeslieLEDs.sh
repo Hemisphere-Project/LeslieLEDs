@@ -1,0 +1,19 @@
+#!/bin/bash
+# Run the LeslieLEDs controller
+pkill LeslieLEDs.sh
+cd "$(dirname "$0")"
+git pull
+
+# Create venv if it doesn't exist
+if [ ! -d ".venv" ]; then
+    echo "Creating virtual environment with uv..."
+    uv venv
+fi
+
+# Install dependencies directly
+echo "Installing dependencies..."
+uv pip install dearpygui python-rtmidi pyserial
+
+# Run the controller
+echo "Starting LeslieLEDs controller..."
+.venv/bin/python controller.py
