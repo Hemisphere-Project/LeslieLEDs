@@ -8,11 +8,17 @@ Two run modes:
 """
 
 import argparse
+import json
 import os
 import signal
+import socket
+import subprocess
 import sys
+import tempfile
 import threading
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import rtmidi
@@ -30,6 +36,29 @@ MIDI_CHANNEL = 0  # Channel 1 (0-indexed)
 SYSEX_MANUFACTURER_ID = 0x7D  # Non-commercial/educational
 SYSEX_MSG_STATE_DUMP  = 0x01  # Full state dump message
 SYSEX_MSG_RIG_HEALTH  = 0x02  # Slave heartbeat table (2 s interval)
+SYSEX_MSG_SCENE_BANK_REQUEST = 0x10
+SYSEX_MSG_SCENE_BANK_DUMP = 0x11
+SYSEX_MSG_SCENE_BANK_LOAD = 0x12
+SYSEX_MSG_SCENE_BANK_STATUS = 0x13
+
+SCENE_BANK_STATUS_OK = 0
+SCENE_BANK_STATUS_BAD_VERSION = 1
+SCENE_BANK_STATUS_BAD_SIZE = 2
+SCENE_BANK_STATUS_DECODE_ERROR = 3
+SCENE_BANK_STATUS_APPLY_ERROR = 4
+
+SCENE_BANK_WIRE_VERSION = 1
+SCENE_BANK_SCENE_SIZE = 16
+SCENE_BANK_FILE_VERSION = 1
+SCENE_BANK_FILE_TYPE = "leslieleds-scene-bank"
+
+_SCENE_BANK_STATUS_TEXT = {
+    SCENE_BANK_STATUS_OK: "Scene bank applied.",
+    SCENE_BANK_STATUS_BAD_VERSION: "Scene bank version mismatch.",
+    SCENE_BANK_STATUS_BAD_SIZE: "Scene bank size mismatch.",
+    SCENE_BANK_STATUS_DECODE_ERROR: "Scene bank payload decode failed.",
+    SCENE_BANK_STATUS_APPLY_ERROR: "Device rejected the scene bank.",
+}
 
 # HeartbeatCollector::Status enum (must match heartbeat_collector.h)
 SLOT_EMPTY  = 0
@@ -136,6 +165,132 @@ DIRECTION_MODES = [
 ]
 
 
+def _instance_socket_path() -> Path:
+    uid = getattr(os, "getuid", lambda: "nouid")()
+    return Path(tempfile.gettempdir()) / f"leslieleds_controller_gui_{uid}.sock"
+
+
+class GuiSingleInstance:
+    def __init__(self):
+        self.socket_path = _instance_socket_path()
+        self._server: Optional[socket.socket] = None
+        self._thread: Optional[threading.Thread] = None
+        self._activate_requested = threading.Event()
+
+    @classmethod
+    def activate_existing_instance(cls) -> bool:
+        if not hasattr(socket, "AF_UNIX"):
+            return False
+
+        socket_path = _instance_socket_path()
+        if not socket_path.exists():
+            return False
+
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(0.5)
+                client.connect(str(socket_path))
+                client.sendall(b"activate\n")
+            return True
+        except OSError:
+            try:
+                socket_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+            return False
+
+    def start(self) -> bool:
+        if not hasattr(socket, "AF_UNIX"):
+            return True
+
+        try:
+            self.socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+        self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            self._server.bind(str(self.socket_path))
+        except OSError:
+            self._server.close()
+            self._server = None
+            return False
+        self._server.listen(1)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+        return True
+
+    def _serve(self):
+        if self._server is None:
+            return
+
+        while True:
+            try:
+                conn, _ = self._server.accept()
+            except OSError:
+                return
+
+            with conn:
+                try:
+                    payload = conn.recv(64)
+                except OSError:
+                    continue
+
+            if b"activate" in payload.lower():
+                self._activate_requested.set()
+
+    def consume_activate_request(self) -> bool:
+        if not self._activate_requested.is_set():
+            return False
+        self._activate_requested.clear()
+        return True
+
+    def close(self):
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+            self._server = None
+
+        try:
+            self.socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def _activate_gui_window():
+    if dpg is not None:
+        try:
+            dpg.show_viewport()
+        except Exception:
+            pass
+
+    if sys.platform != "darwin":
+        return
+
+    script = (
+        'tell application "System Events" '
+        f'to set frontmost of the first process whose unix id is {os.getpid()} to true'
+    )
+    try:
+        subprocess.run(
+            ["/usr/bin/osascript", "-e", script],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except Exception:
+        pass
+
+
 class LeslieLEDsController:
     def __init__(self):
         self.midi_out: Optional[rtmidi.MidiOut] = None
@@ -156,6 +311,9 @@ class LeslieLEDsController:
         # Parsed rig health: list of dicts with keys nid, status, fps, reset
         self._rig_health: list = []
         self._last_health_print: float = 0.0  # monotonic time of last terminal print
+        self._pending_scene_bank_save_path: Optional[str] = None
+        self._pending_scene_bank_operation: Optional[str] = None
+        self._pending_scene_bank_deadline: float = 0.0
         # When True, skip every DearPyGUI mutation (no UI is mounted).
         # Set by main_headless(); all _safe_* DPG helpers no-op in that mode.
         self.headless = False
@@ -296,6 +454,12 @@ class LeslieLEDsController:
             if self.headless:
                 self._print_rig_health_if_due()
 
+        elif msg_type == SYSEX_MSG_SCENE_BANK_DUMP and len(sysex_data) >= 7:
+            self._handle_scene_bank_dump(sysex_data)
+
+        elif msg_type == SYSEX_MSG_SCENE_BANK_STATUS and len(sysex_data) >= 5:
+            self._handle_scene_bank_status(sysex_data)
+
     def _update_rig_health_display(self):
         """Update rig-health text rows in the GUI. No-op in headless."""
         if self.headless or dpg is None:
@@ -385,6 +549,226 @@ class LeslieLEDsController:
                     self._dpg_bind_theme(f"scene_btn_{i}", 0)
         except Exception:
             pass  # GUI not ready yet
+
+    def _default_scene_bank_path(self) -> str:
+        return str(Path.cwd() / "leslie_scene_bank.json")
+
+    def _update_scene_bank_status(self, message: str, color=(150, 150, 150)):
+        if not self.headless:
+            print(f"[scene-bank] {message}")
+        if self.headless or dpg is None:
+            return
+        if dpg.does_item_exist("scene_bank_status_text"):
+            dpg.set_value("scene_bank_status_text", message)
+            dpg.configure_item("scene_bank_status_text", color=color)
+
+    @staticmethod
+    def _encode_nibble_bytes(raw: bytes) -> list[int]:
+        encoded: list[int] = []
+        for value in raw:
+            encoded.append((value >> 4) & 0x0F)
+            encoded.append(value & 0x0F)
+        return encoded
+
+    @staticmethod
+    def _decode_nibble_bytes(encoded: list[int]) -> Optional[bytes]:
+        if len(encoded) % 2 != 0:
+            return None
+        raw = bytearray(len(encoded) // 2)
+        for index in range(0, len(encoded), 2):
+            hi = encoded[index]
+            lo = encoded[index + 1]
+            if hi < 0 or hi > 0x0F or lo < 0 or lo > 0x0F:
+                return None
+            raw[index // 2] = (hi << 4) | lo
+        return bytes(raw)
+
+    def _clear_scene_bank_pending(self):
+        self._pending_scene_bank_operation = None
+        self._pending_scene_bank_save_path = None
+        self._pending_scene_bank_deadline = 0.0
+
+    def _scene_bank_transport_ready(self) -> bool:
+        if self.is_serial_mode:
+            self._update_scene_bank_status(
+                "Scene bank backup uses USB MIDI only; serial mode ignores SysEx.",
+                (255, 140, 100),
+            )
+            return False
+        if not self.midi_out or not self.midi_out.is_port_open():
+            self._update_scene_bank_status("Connect the device over USB MIDI first.", (255, 100, 100))
+            return False
+        if not self.midi_device_in or not self.midi_device_in.is_port_open():
+            self._update_scene_bank_status(
+                "USB MIDI input is not open; bank transfer needs bidirectional MIDI.",
+                (255, 100, 100),
+            )
+            return False
+        return True
+
+    def send_sysex(self, body: list[int]) -> bool:
+        if not self._scene_bank_transport_ready():
+            return False
+        if not self.midi_out or not self.midi_out.is_port_open():
+            return False
+        self.midi_out.send_message([0xF0, SYSEX_MANUFACTURER_ID, *body, 0xF7])
+        return True
+
+    def request_scene_bank_dump(self, file_path: str):
+        target = Path(file_path or self._default_scene_bank_path()).expanduser()
+        if not self.send_sysex([SYSEX_MSG_SCENE_BANK_REQUEST, SCENE_BANK_WIRE_VERSION]):
+            return
+        self._pending_scene_bank_save_path = str(target)
+        self._pending_scene_bank_operation = "dump"
+        self._pending_scene_bank_deadline = time.monotonic() + 5.0
+        self._update_scene_bank_status(f"Requesting scene bank into {target} ...", (120, 180, 255))
+
+    def load_scene_bank_from_file(self, file_path: str):
+        target = Path(file_path or self._default_scene_bank_path()).expanduser()
+        if not target.exists():
+            self._update_scene_bank_status(f"Scene bank file not found: {target}", (255, 100, 100))
+            return
+
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self._update_scene_bank_status(f"Could not read scene bank file: {exc}", (255, 100, 100))
+            return
+
+        if payload.get("file_type") != SCENE_BANK_FILE_TYPE:
+            self._update_scene_bank_status("Scene bank file type is not recognized.", (255, 100, 100))
+            return
+
+        wire_version = int(payload.get("wire_version", 0))
+        scene_count = int(payload.get("scene_count", 0))
+        scene_size = int(payload.get("scene_size", 0))
+        data_hex = payload.get("data_hex")
+
+        if wire_version != SCENE_BANK_WIRE_VERSION:
+            self._update_scene_bank_status("Scene bank file uses an unsupported wire version.", (255, 100, 100))
+            return
+        if scene_count <= 0 or scene_count > 127 or scene_size != SCENE_BANK_SCENE_SIZE:
+            self._update_scene_bank_status("Scene bank file has invalid size metadata.", (255, 100, 100))
+            return
+        if not isinstance(data_hex, str):
+            self._update_scene_bank_status("Scene bank file is missing raw bank data.", (255, 100, 100))
+            return
+
+        try:
+            raw = bytes.fromhex(data_hex)
+        except ValueError as exc:
+            self._update_scene_bank_status(f"Scene bank hex payload is invalid: {exc}", (255, 100, 100))
+            return
+
+        expected_size = scene_count * scene_size
+        if len(raw) != expected_size:
+            self._update_scene_bank_status(
+                f"Scene bank payload length mismatch: expected {expected_size} bytes, got {len(raw)}.",
+                (255, 100, 100),
+            )
+            return
+
+        message = [
+            SYSEX_MSG_SCENE_BANK_LOAD,
+            wire_version,
+            scene_count,
+            scene_size,
+            *self._encode_nibble_bytes(raw),
+        ]
+        if not self.send_sysex(message):
+            return
+
+        self._pending_scene_bank_operation = "load"
+        self._pending_scene_bank_deadline = time.monotonic() + 5.0
+        self._update_scene_bank_status(f"Uploading scene bank from {target} ...", (120, 180, 255))
+
+    def _handle_scene_bank_dump(self, sysex_data):
+        wire_version = sysex_data[3]
+        scene_count = sysex_data[4]
+        scene_size = sysex_data[5]
+        encoded = sysex_data[6:-1]
+
+        if wire_version != SCENE_BANK_WIRE_VERSION:
+            self._clear_scene_bank_pending()
+            self._update_scene_bank_status("Device returned an unsupported scene bank version.", (255, 100, 100))
+            return
+        if scene_count <= 0 or scene_size != SCENE_BANK_SCENE_SIZE:
+            self._clear_scene_bank_pending()
+            self._update_scene_bank_status("Device returned invalid scene bank metadata.", (255, 100, 100))
+            return
+
+        raw = self._decode_nibble_bytes(encoded)
+        if raw is None:
+            self._clear_scene_bank_pending()
+            self._update_scene_bank_status("Device returned a corrupt scene bank payload.", (255, 100, 100))
+            return
+
+        expected_size = scene_count * scene_size
+        if len(raw) != expected_size:
+            self._clear_scene_bank_pending()
+            self._update_scene_bank_status(
+                f"Device returned {len(raw)} bytes, expected {expected_size} for the scene bank.",
+                (255, 100, 100),
+            )
+            return
+
+        target = Path(self._pending_scene_bank_save_path or self._default_scene_bank_path()).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "file_type": SCENE_BANK_FILE_TYPE,
+            "file_version": SCENE_BANK_FILE_VERSION,
+            "wire_version": wire_version,
+            "scene_count": scene_count,
+            "scene_size": scene_size,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "source_port": self.midi_port_name,
+            "data_hex": raw.hex(),
+        }
+
+        try:
+            target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:
+            self._clear_scene_bank_pending()
+            self._update_scene_bank_status(f"Could not write scene bank file: {exc}", (255, 100, 100))
+            return
+
+        self._clear_scene_bank_pending()
+        self._update_scene_bank_status(f"Saved full scene bank to {target}", (100, 220, 120))
+
+    def _handle_scene_bank_status(self, sysex_data):
+        status_code = sysex_data[3]
+        detail = sysex_data[4] if len(sysex_data) > 4 else 0
+        base_message = _SCENE_BANK_STATUS_TEXT.get(status_code, f"Unknown scene bank status {status_code}.")
+
+        if status_code == SCENE_BANK_STATUS_OK:
+            if self._pending_scene_bank_operation == "load":
+                message = f"Scene bank applied on device ({detail} scenes)."
+            else:
+                message = base_message
+            color = (100, 220, 120)
+        elif status_code == SCENE_BANK_STATUS_BAD_VERSION:
+            message = f"{base_message} Device detail: {detail}."
+            color = (255, 100, 100)
+        elif status_code == SCENE_BANK_STATUS_BAD_SIZE:
+            message = f"{base_message} Device detail: {detail}."
+            color = (255, 100, 100)
+        else:
+            message = base_message
+            color = (255, 100, 100)
+
+        if self._pending_scene_bank_operation == "load" or status_code != SCENE_BANK_STATUS_OK:
+            self._clear_scene_bank_pending()
+        self._update_scene_bank_status(message, color)
+
+    def poll_pending_operations(self):
+        if not self._pending_scene_bank_operation:
+            return
+        if time.monotonic() < self._pending_scene_bank_deadline:
+            return
+
+        operation = self._pending_scene_bank_operation
+        self._clear_scene_bank_pending()
+        self._update_scene_bank_status(f"Scene bank {operation} timed out.", (255, 140, 100))
         
     def get_available_ports(self):
         """Get list of available MIDI output ports and serial ports"""
@@ -419,6 +803,7 @@ class LeslieLEDsController:
         if self.serial_port and self.serial_port.is_open:
             self.serial_port.close()
             self.serial_port = None
+        self._clear_scene_bank_pending()
         
         if port_type == "MIDI":
             # Connect to USB MIDI port (both output and input)
@@ -647,6 +1032,18 @@ def on_scene_button(sender, app_data, user_data):
         update_scene_button_colors()
 
 
+def on_dump_scene_bank(sender=None, app_data=None, user_data=None):
+    """Request a full scene-bank dump from the device and save it on the host."""
+    file_path = dpg.get_value("scene_bank_path") if dpg is not None else ""
+    controller.request_scene_bank_dump(file_path)
+
+
+def on_load_scene_bank(sender=None, app_data=None, user_data=None):
+    """Load a full scene-bank file from disk and push it to the device."""
+    file_path = dpg.get_value("scene_bank_path") if dpg is not None else ""
+    controller.load_scene_bank_from_file(file_path)
+
+
 def on_reset_button():
     """Reset all sliders to default values and send to MIDI receiver"""
     # Map CC numbers to their slider tags
@@ -871,6 +1268,18 @@ def create_gui():
                                  tag=f"scene_btn_{i}")
             
             dpg.add_spacer(height=10)
+            dpg.add_text("Scene Bank Backup:")
+            dpg.add_input_text(tag="scene_bank_path",
+                               default_value=controller._default_scene_bank_path(),
+                               width=360)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Dump Bank", callback=on_dump_scene_bank, width=110)
+                dpg.add_button(label="Load Bank", callback=on_load_scene_bank, width=110)
+            dpg.add_text("USB MIDI only. Saves/restores the full device preset bank as one host file.",
+                         color=(120, 120, 120), wrap=420)
+            dpg.add_text("", tag="scene_bank_status_text", color=(150, 150, 150), wrap=420)
+
+            dpg.add_spacer(height=10)
             dpg.add_button(label="RESET", callback=on_reset_button,
                           width=200, height=30)
 
@@ -964,20 +1373,38 @@ def main_gui() -> int:
     import dearpygui.dearpygui as _dpg
     dpg = _dpg
 
-    controller.setup_midi()
-    create_gui()
+    if GuiSingleInstance.activate_existing_instance():
+        return 0
 
-    # Initial port refresh
-    refresh_ports()
+    single_instance = GuiSingleInstance()
+    if not single_instance.start():
+        if GuiSingleInstance.activate_existing_instance():
+            return 0
+        print("[LeslieLEDs] another GUI instance is starting; exiting.")
+        return 0
+    context_created = False
 
-    # Main loop
-    while dpg.is_dearpygui_running():
-        dpg.render_dearpygui_frame()
+    try:
+        controller.setup_midi()
+        create_gui()
+        context_created = True
 
-    # Cleanup
-    controller.cleanup()
-    dpg.destroy_context()
-    return 0
+        # Initial port refresh
+        refresh_ports()
+
+        # Main loop
+        while dpg.is_dearpygui_running():
+            if single_instance.consume_activate_request():
+                _activate_gui_window()
+            controller.poll_pending_operations()
+            dpg.render_dearpygui_frame()
+
+        return 0
+    finally:
+        controller.cleanup()
+        single_instance.close()
+        if context_created:
+            dpg.destroy_context()
 
 
 def main():

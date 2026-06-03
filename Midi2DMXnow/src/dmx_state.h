@@ -39,6 +39,10 @@ struct ScenePreset {
  */
 class DMXState {
 public:
+    static constexpr uint8_t SCENE_BANK_WIRE_VERSION = 1;
+    static constexpr size_t SCENE_WIRE_SIZE = 16;
+    static constexpr size_t SCENE_BANK_WIRE_SIZE = MAX_SCENES * SCENE_WIRE_SIZE;
+
     struct SceneEvent {
         bool triggered = false;
         bool saved = false;
@@ -74,6 +78,8 @@ public:
     int8_t getCurrentScene() const { return _currentScene; }
 
     LedEngineLib::LedEngineState toLedEngineState() const;
+    size_t serializeSceneBank(uint8_t* out, size_t capacity) const;
+    bool deserializeSceneBank(const uint8_t* data, size_t byteCount, uint8_t sceneCount);
 
 private:
     struct SceneStorageBlock {

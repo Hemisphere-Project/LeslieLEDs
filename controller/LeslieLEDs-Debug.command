@@ -1,6 +1,6 @@
 #!/bin/bash
-# Run the LeslieLEDs controller through the shared bootstrap launcher.
-set -euo pipefail
+# Finder-friendly debug launcher: opens in Terminal and keeps output visible.
+set -u
 
 cd "$(dirname "$0")"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -14,4 +14,12 @@ else
     exit 1
 fi
 
-exec "$PYTHON_BIN" launcher.py "$@"
+"$PYTHON_BIN" launcher.py "$@"
+exit_code=$?
+
+if [ -z "${LESLIELEDS_NO_PAUSE:-}" ]; then
+    printf "\nPress Return to close..."
+    read -r _
+fi
+
+exit "$exit_code"

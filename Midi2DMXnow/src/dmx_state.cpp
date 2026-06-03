@@ -7,6 +7,28 @@ using LedEngineLib::MirrorMode;
 
 namespace {
 
+struct SerializedScenePreset {
+    uint8_t mode;
+    uint8_t colorAHue;
+    uint8_t colorASaturation;
+    uint8_t colorAValue;
+    uint8_t colorAWhite;
+    uint8_t colorBHue;
+    uint8_t colorBSaturation;
+    uint8_t colorBValue;
+    uint8_t colorBWhite;
+    uint8_t masterBrightness;
+    uint8_t speed;
+    uint8_t blendMode;
+    uint8_t mirror;
+    uint8_t direction;
+    uint8_t animationCtrl;
+    uint8_t strobeRate;
+};
+
+static_assert(sizeof(SerializedScenePreset) == DMXState::SCENE_WIRE_SIZE,
+              "SerializedScenePreset must stay 16 bytes");
+
 MirrorMode decodeMirror(uint8_t value) {
     if (value < 51) return LedEngineLib::MIRROR_NONE;
     if (value < 102) return LedEngineLib::MIRROR_FULL;
@@ -245,6 +267,82 @@ LedEngineState DMXState::toLedEngineState() const {
     state.colorA_hue = _colorA.hue;  // Store hue for rainbow animation
     state.colorB_hue = _colorB.hue;  // Store hue for rainbow animation
     return state;
+}
+
+size_t DMXState::serializeSceneBank(uint8_t* out, size_t capacity) const {
+    if (!out || capacity < SCENE_BANK_WIRE_SIZE) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < MAX_SCENES; ++i) {
+        const ScenePreset& scene = _scenes[i];
+        SerializedScenePreset wire = {
+            static_cast<uint8_t>(scene.mode),
+            scene.colorA.hue,
+            scene.colorA.saturation,
+            scene.colorA.value,
+            scene.colorA.white,
+            scene.colorB.hue,
+            scene.colorB.saturation,
+            scene.colorB.value,
+            scene.colorB.white,
+            scene.masterBrightness,
+            scene.speed,
+            scene.blendMode,
+            scene.mirror,
+            scene.direction,
+            scene.animationCtrl,
+            scene.strobeRate,
+        };
+        memcpy(out + (i * SCENE_WIRE_SIZE), &wire, SCENE_WIRE_SIZE);
+    }
+
+    return SCENE_BANK_WIRE_SIZE;
+}
+
+bool DMXState::deserializeSceneBank(const uint8_t* data, size_t byteCount, uint8_t sceneCount) {
+    if (!data || sceneCount == 0 || sceneCount > MAX_SCENES) {
+        return false;
+    }
+
+    size_t expectedSize = static_cast<size_t>(sceneCount) * SCENE_WIRE_SIZE;
+    if (byteCount != expectedSize) {
+        return false;
+    }
+
+    initDefaultScenes();
+
+    for (size_t i = 0; i < sceneCount; ++i) {
+        SerializedScenePreset wire;
+        memcpy(&wire, data + (i * SCENE_WIRE_SIZE), SCENE_WIRE_SIZE);
+
+        ScenePreset& scene = _scenes[i];
+        uint8_t clampedMode = wire.mode;
+        if (clampedMode >= LedEngineLib::ANIM_MODE_COUNT) {
+            clampedMode = LedEngineLib::ANIM_MODE_COUNT - 1;
+        }
+
+        scene.mode = static_cast<AnimationMode>(clampedMode);
+        scene.colorA = HSVColor(wire.colorAHue,
+                                wire.colorASaturation,
+                                wire.colorAValue,
+                                wire.colorAWhite);
+        scene.colorB = HSVColor(wire.colorBHue,
+                                wire.colorBSaturation,
+                                wire.colorBValue,
+                                wire.colorBWhite);
+        scene.masterBrightness = wire.masterBrightness;
+        scene.speed = wire.speed;
+        scene.blendMode = wire.blendMode;
+        scene.mirror = wire.mirror;
+        scene.direction = wire.direction;
+        scene.animationCtrl = wire.animationCtrl;
+        scene.strobeRate = wire.strobeRate;
+    }
+
+    _currentScene = -1;
+    persistScenes();
+    return true;
 }
 
 void DMXState::loadScene(uint8_t sceneIndex) {

@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+show_alert() {
+    if [ -x /usr/bin/osascript ]; then
+        /usr/bin/osascript -e "display alert \"LeslieLEDs Launcher\" message \"$1\"" >/dev/null 2>&1 || true
+    fi
+}
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+CONTROLLER_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../../.." && pwd)
+
+if [ ! -f "$CONTROLLER_DIR/launcher.py" ]; then
+    show_alert "Could not find controller/launcher.py. Keep LeslieLEDs.app inside controller/macos/ in the repository checkout."
+    exit 1
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN=python3
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN=python
+elif [ -x /opt/homebrew/bin/python3 ]; then
+    PYTHON_BIN=/opt/homebrew/bin/python3
+elif [ -x /usr/local/bin/python3 ]; then
+    PYTHON_BIN=/usr/local/bin/python3
+else
+    show_alert "python3 was not found. Install Python 3 and try again."
+    exit 1
+fi
+
+exec "$PYTHON_BIN" "$CONTROLLER_DIR/launcher.py" --detached "$@"

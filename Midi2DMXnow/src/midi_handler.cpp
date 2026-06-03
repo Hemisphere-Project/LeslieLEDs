@@ -5,9 +5,45 @@
 #include "config.h"
 #include <USB.h>
 
+namespace {
+
+constexpr uint8_t SCENE_BANK_STATUS_OK = 0;
+constexpr uint8_t SCENE_BANK_STATUS_BAD_VERSION = 1;
+constexpr uint8_t SCENE_BANK_STATUS_BAD_SIZE = 2;
+constexpr uint8_t SCENE_BANK_STATUS_DECODE_ERROR = 3;
+constexpr uint8_t SCENE_BANK_STATUS_APPLY_ERROR = 4;
+
+size_t decodeNibbleBytes(const uint8_t* encoded,
+                        size_t encodedSize,
+                        uint8_t* out,
+                        size_t outCapacity) {
+    if (!encoded || !out || (encodedSize % 2) != 0) {
+        return 0;
+    }
+
+    size_t rawSize = encodedSize / 2;
+    if (rawSize > outCapacity) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < rawSize; ++i) {
+        uint8_t hi = encoded[i * 2];
+        uint8_t lo = encoded[i * 2 + 1];
+        if (hi > 0x0F || lo > 0x0F) {
+            return 0;
+        }
+        out[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+
+    return rawSize;
+}
+
+}
+
 MIDIHandler::MIDIHandler()
     : _dmxState(nullptr), _heartbeats(nullptr),
-      _lastSysExSend(0), _lastRigHealthSend(0) {}
+      _lastSysExSend(0), _lastRigHealthSend(0),
+      _sysexRxLength(0), _sysexRxActive(false) {}
 
 void MIDIHandler::begin() {
     // Set USB device name before starting
@@ -126,28 +162,196 @@ void MIDIHandler::sendRigHealthSysEx() {
     }
 }
 
+void MIDIHandler::resetSysExReceive() {
+    _sysexRxLength = 0;
+    _sysexRxActive = false;
+}
+
+void MIDIHandler::processSysExPacket(const midiEventPacket_t& packet, uint8_t cin) {
+    uint8_t bytes[3] = {packet.byte1, packet.byte2, packet.byte3};
+
+    switch (cin) {
+        case 0x04:
+            appendSysExBytes(bytes, 3, false);
+            break;
+        case 0x05:
+            appendSysExBytes(bytes, 1, true);
+            break;
+        case 0x06:
+            appendSysExBytes(bytes, 2, true);
+            break;
+        case 0x07:
+            appendSysExBytes(bytes, 3, true);
+            break;
+        default:
+            break;
+    }
+}
+
+void MIDIHandler::appendSysExBytes(const uint8_t* data, size_t count, bool complete) {
+    for (size_t i = 0; i < count; ++i) {
+        uint8_t value = data[i];
+        if (!_sysexRxActive) {
+            if (value != 0xF0) {
+                continue;
+            }
+            _sysexRxActive = true;
+            _sysexRxLength = 0;
+        }
+
+        if (_sysexRxLength >= SYSEX_RX_MAX_BYTES) {
+            resetSysExReceive();
+            return;
+        }
+
+        _sysexRxBuffer[_sysexRxLength++] = value;
+    }
+
+    if (complete && _sysexRxActive) {
+        handleCompletedSysEx();
+        resetSysExReceive();
+    }
+}
+
+void MIDIHandler::handleCompletedSysEx() {
+    if (_sysexRxLength < 5) {
+        return;
+    }
+    if (_sysexRxBuffer[0] != 0xF0 || _sysexRxBuffer[_sysexRxLength - 1] != 0xF7) {
+        return;
+    }
+    if (_sysexRxBuffer[1] != SYSEX_MANUFACTURER_ID) {
+        return;
+    }
+
+    uint8_t msgType = _sysexRxBuffer[2];
+    if (msgType == SYSEX_MSG_SCENE_BANK_REQUEST) {
+        if (_sysexRxLength != 5) {
+            sendSceneBankStatusSysEx(SCENE_BANK_STATUS_BAD_SIZE, 0);
+            return;
+        }
+        if (_sysexRxBuffer[3] != DMXState::SCENE_BANK_WIRE_VERSION) {
+            sendSceneBankStatusSysEx(SCENE_BANK_STATUS_BAD_VERSION, _sysexRxBuffer[3]);
+            return;
+        }
+        sendSceneBankDumpSysEx();
+        _processor.postStatusMessage("Bank dump");
+        return;
+    }
+
+    if (msgType != SYSEX_MSG_SCENE_BANK_LOAD) {
+        return;
+    }
+
+    if (_sysexRxLength < 7) {
+        sendSceneBankStatusSysEx(SCENE_BANK_STATUS_BAD_SIZE, 0);
+        return;
+    }
+
+    uint8_t version = _sysexRxBuffer[3];
+    uint8_t sceneCount = _sysexRxBuffer[4];
+    uint8_t sceneSize = _sysexRxBuffer[5];
+    size_t encodedSize = _sysexRxLength - 7;
+
+    if (version != DMXState::SCENE_BANK_WIRE_VERSION) {
+        sendSceneBankStatusSysEx(SCENE_BANK_STATUS_BAD_VERSION, version);
+        return;
+    }
+
+    if (sceneCount == 0 || sceneCount > MAX_SCENES || sceneSize != DMXState::SCENE_WIRE_SIZE) {
+        sendSceneBankStatusSysEx(SCENE_BANK_STATUS_BAD_SIZE, sceneCount);
+        return;
+    }
+
+    size_t expectedEncodedSize = static_cast<size_t>(sceneCount) * sceneSize * 2;
+    if (encodedSize != expectedEncodedSize) {
+        sendSceneBankStatusSysEx(SCENE_BANK_STATUS_BAD_SIZE, sceneCount);
+        return;
+    }
+
+    size_t decodedSize = decodeNibbleBytes(_sysexRxBuffer + 6,
+                                           encodedSize,
+                                           _sceneBankBuffer,
+                                           sizeof(_sceneBankBuffer));
+    if (decodedSize == 0) {
+        sendSceneBankStatusSysEx(SCENE_BANK_STATUS_DECODE_ERROR, sceneCount);
+        return;
+    }
+
+    if (!_dmxState || !_dmxState->deserializeSceneBank(_sceneBankBuffer, decodedSize, sceneCount)) {
+        sendSceneBankStatusSysEx(SCENE_BANK_STATUS_APPLY_ERROR, sceneCount);
+        return;
+    }
+
+    sendSceneBankStatusSysEx(SCENE_BANK_STATUS_OK, sceneCount);
+    _processor.postStatusMessage("Bank loaded");
+}
+
+void MIDIHandler::sendSceneBankDumpSysEx() {
+    if (!_dmxState) {
+        sendSceneBankStatusSysEx(SCENE_BANK_STATUS_APPLY_ERROR, 0);
+        return;
+    }
+
+    size_t rawSize = _dmxState->serializeSceneBank(_sceneBankBuffer, sizeof(_sceneBankBuffer));
+    if (rawSize != DMXState::SCENE_BANK_WIRE_SIZE) {
+        sendSceneBankStatusSysEx(SCENE_BANK_STATUS_APPLY_ERROR, 0);
+        return;
+    }
+
+    _midi.write(0xF0);
+    _midi.write(SYSEX_MANUFACTURER_ID);
+    _midi.write(SYSEX_MSG_SCENE_BANK_DUMP);
+    _midi.write(DMXState::SCENE_BANK_WIRE_VERSION);
+    _midi.write(MAX_SCENES & 0x7F);
+    _midi.write(DMXState::SCENE_WIRE_SIZE & 0x7F);
+
+    for (size_t i = 0; i < rawSize; ++i) {
+        uint8_t value = _sceneBankBuffer[i];
+        _midi.write((value >> 4) & 0x0F);
+        _midi.write(value & 0x0F);
+    }
+
+    _midi.write(0xF7);
+}
+
+void MIDIHandler::sendSceneBankStatusSysEx(uint8_t status, uint8_t detail) {
+    _midi.write(0xF0);
+    _midi.write(SYSEX_MANUFACTURER_ID);
+    _midi.write(SYSEX_MSG_SCENE_BANK_STATUS);
+    _midi.write(status & 0x7F);
+    _midi.write(detail & 0x7F);
+    _midi.write(0xF7);
+}
+
 void MIDIHandler::update() {
     midiEventPacket_t packet;
     
     while (_midi.readPacket(&packet)) {
         uint8_t cin = packet.header & 0x0F;
-        byte channel = (packet.byte1 & 0x0F) + 1;
         
         switch (cin) {
             case 0x0B: // Control Change
-                _processor.handleControlChange(channel, packet.byte2, packet.byte3);
+                _processor.handleControlChange((packet.byte1 & 0x0F) + 1, packet.byte2, packet.byte3);
                 break;
                 
             case 0x09: // Note On
                 if (packet.byte3 > 0) {
-                    _processor.handleNoteOn(channel, packet.byte2, packet.byte3);
+                    _processor.handleNoteOn((packet.byte1 & 0x0F) + 1, packet.byte2, packet.byte3);
                 } else {
-                    _processor.handleNoteOff(channel, packet.byte2, 0);
+                    _processor.handleNoteOff((packet.byte1 & 0x0F) + 1, packet.byte2, 0);
                 }
                 break;
                 
             case 0x08: // Note Off
-                _processor.handleNoteOff(channel, packet.byte2, packet.byte3);
+                _processor.handleNoteOff((packet.byte1 & 0x0F) + 1, packet.byte2, packet.byte3);
+                break;
+
+            case 0x04: // SysEx start/continue
+            case 0x05: // SysEx end with 1 byte
+            case 0x06: // SysEx end with 2 bytes
+            case 0x07: // SysEx end with 3 bytes
+                processSysExPacket(packet, cin);
                 break;
         }
     }
