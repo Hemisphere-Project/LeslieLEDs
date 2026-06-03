@@ -43,6 +43,7 @@ private:
     HeartbeatCollector* _heartbeats;
     uint32_t _lastSysExSend;
     uint32_t _lastRigHealthSend;
+    uint32_t _suspendPeriodicSysExUntil;
     size_t _sysexRxLength;
     bool _sysexRxActive;
     static constexpr size_t SYSEX_RX_MAX_BYTES = 3072;
@@ -50,6 +51,7 @@ private:
     uint8_t _sceneBankBuffer[DMXState::SCENE_BANK_WIRE_SIZE];
     static constexpr uint32_t SYSEX_SEND_INTERVAL       = 500;  // ms
     static constexpr uint32_t RIG_HEALTH_SEND_INTERVAL  = 2000; // ms
+    static constexpr uint32_t SCENE_BANK_TX_QUIET_MS    = 2000; // ms
 
     void resetSysExReceive();
     void processSysExPacket(const midiEventPacket_t& packet, uint8_t cin);

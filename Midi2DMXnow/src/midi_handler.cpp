@@ -75,7 +75,8 @@ size_t decodeNibbleBytes(const uint8_t* encoded,
 
 MIDIHandler::MIDIHandler()
     : _dmxState(nullptr), _heartbeats(nullptr),
-      _lastSysExSend(0), _lastRigHealthSend(0),
+    _lastSysExSend(0), _lastRigHealthSend(0),
+    _suspendPeriodicSysExUntil(0),
       _sysexRxLength(0), _sysexRxActive(false) {}
 
 void MIDIHandler::begin() {
@@ -351,9 +352,13 @@ void MIDIHandler::sendSceneBankDumpSysEx() {
     message[length++] = 0xF7;
     sendSysEx(_midi, message, length);
 
-    // Reset the periodic state-dump timer so it doesn't fire immediately
-    // after the bank dump and coalesce into the same macOS CoreMIDI delivery.
-    _lastSysExSend = millis();
+    // A bank dump is the longest SysEx transfer we send. Keep periodic state
+    // feedback off the wire briefly afterwards so CoreMIDI only has to
+    // reassemble one long message at a time.
+    const uint32_t now = millis();
+    _lastSysExSend = now;
+    _lastRigHealthSend = now;
+    _suspendPeriodicSysExUntil = now + SCENE_BANK_TX_QUIET_MS;
 }
 
 void MIDIHandler::sendSceneBankStatusSysEx(uint8_t status, uint8_t detail) {
@@ -408,6 +413,10 @@ void MIDIHandler::update() {
     // state dump. Rig health takes priority; when it fires we defer the
     // state dump by resetting its timer, keeping them perpetually staggered.
     uint32_t now = millis();
+    if (now < _suspendPeriodicSysExUntil) {
+        return;
+    }
+
     if (now - _lastRigHealthSend >= RIG_HEALTH_SEND_INTERVAL) {
         sendRigHealthSysEx();
         _lastRigHealthSend = now;

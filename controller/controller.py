@@ -421,6 +421,12 @@ class LeslieLEDsController:
         if not midi_message:
             return
 
+        if self._sysex_buffer and midi_message[0] == 0xF0:
+            self._debug_log(
+                f"[RX] sysex RESYNC dropping partial len={len(self._sysex_buffer)} for new start len={len(midi_message)}"
+            )
+            self._sysex_buffer = []
+
         # Check for SysEx message (starts with F0, ends with F7)
         if midi_message[0] == 0xF0:
             # Full SysEx message (may contain multiple coalesced messages)
@@ -895,6 +901,15 @@ class LeslieLEDsController:
         if scene_count <= 0 or scene_size != SCENE_BANK_SCENE_SIZE:
             self._clear_scene_bank_pending()
             self._update_scene_bank_status("Device returned invalid scene bank metadata.", (255, 100, 100))
+            return
+
+        expected_encoded_size = scene_count * scene_size * 2
+        if len(encoded) != expected_encoded_size:
+            self._clear_scene_bank_pending()
+            self._update_scene_bank_status(
+                f"Device returned {len(encoded)} encoded bytes, expected {expected_encoded_size}.",
+                (255, 100, 100),
+            )
             return
 
         raw = self._decode_nibble_bytes(encoded)
