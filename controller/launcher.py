@@ -2,8 +2,10 @@
 """Bootstrap launcher for the LeslieLEDs controller.
 
 Keeps the controller running from the live git checkout so launch-time
-fast-forward updates still apply, while also supporting a detached launch
-mode for a Finder-friendly macOS app wrapper.
+fast-forward updates still apply.  When invoked from the macOS .app bundle
+the shell wrapper uses ``exec`` so this process (and the eventual
+controller.py) *is* the bundle process — giving it the correct Dock icon
+and making macOS enforce single-instance via LSMultipleInstancesProhibited.
 """
 
 from __future__ import annotations
@@ -270,9 +272,38 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _maybe_activate_existing_gui() -> bool:
+    """If a GUI controller is already running, signal it to come to front.
+
+    Uses the same Unix-socket path that GuiSingleInstance in controller.py
+    binds on.  Returns True if an existing live instance was found so the
+    caller can exit immediately (before any slow git / venv operations).
+    """
+    try:
+        import socket as _socket
+        import tempfile
+        uid = getattr(os, "getuid", lambda: "nouid")()
+        sock_path = Path(tempfile.gettempdir()) / f"leslieleds_controller_gui_{uid}.sock"
+        if not sock_path.exists():
+            return False
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as client:
+            client.settimeout(1.0)
+            client.connect(str(sock_path))
+            client.sendall(b"activate\n")
+        _log("Existing GUI instance found; sent activate signal.")
+        return True
+    except Exception:
+        return False
+
+
 def main() -> int:
     _prepend_common_mac_paths()
     args = parse_args()
+
+    # Fast-path: if a GUI is already running, activate it and exit before
+    # touching git or the venv (which can take several seconds).
+    if not args.headless and _maybe_activate_existing_gui():
+        return 0
 
     maybe_fast_forward_update(enabled=not args.no_update)
     venv_python = ensure_venv()

@@ -63,11 +63,9 @@ if ! "$PYTHON_BIN" -c 'import pathlib, sys; pathlib.Path(sys.argv[1]).read_bytes
     esac
     exit 1
 fi
-echo "[wrapper] launching bootstrap in detached mode"
-"$PYTHON_BIN" "$CONTROLLER_DIR/launcher.py" --detached "$@"
-ret=$?
-echo "[wrapper] bootstrap exit code: $ret"
-if [ "$ret" -ne 0 ]; then
-    show_alert "LeslieLEDs failed to start. See $WRAPPER_LOG for details."
-fi
-exit "$ret"
+echo "[wrapper] launching bootstrap"
+exec "$PYTHON_BIN" "$CONTROLLER_DIR/launcher.py" "$@"
+# exec replaces this shell process; lines below only run if exec itself fails
+echo "[wrapper] ERROR: exec of python launcher failed"
+show_alert "LeslieLEDs failed to start. See $WRAPPER_LOG for details."
+exit 1
